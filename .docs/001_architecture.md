@@ -300,16 +300,20 @@ pub struct PacketHeader {
 
 | Packet Type  | Size  | Layout                              |
 |--------------|-------|-------------------------------------|
-| KeepAlive     | 18 B  | header(18)                         |
-| Authenticate  | 34 B  | header(18) + user_id(16)            |
-| PlayerPos    | 44 B  | header(18) + padding(2) + id(16) + x(4) + y(4) |
-| GameState    | 36 B  | header(18) + padding(2) + tick(4) + player_count(4) + reserved(8) |
-| SpriteMessage| 46 B  | header(18) + operation(1) + padding1(1) + sprite_type(1) + padding2(3) + id(16) + x(2) + y(2) + padding3(2) |
+| KeepAlive     | 18 B  | packet_type(1) + magic(1) + uuid(16) |
+| Authenticate  | 34 B  | packet_type(1) + magic(1) + uuid(16) + user_id(16) |
+| PlayerPos    | 44 B  | packet_type(1) + magic(1) + uuid(16) + padding(2) + id(16) + x(4) + y(4) |
+| GameState    | 36 B  | packet_type(1) + magic(1) + uuid(16) + padding(2) + tick(4) + player_count(4) + reserved(8) |
+| SpriteMessage| 30 B  | packet_type(1) + magic(1) + operation(1) + padding1(1) + sprite_type(1) + padding2(3) + id(16) + x(2) + y(2) + padding3(2) |
 
 **Alignment Notes:**
 - All fields aligned to natural boundaries
 - Padding added for struct alignment
 - repr(C) ensures consistent layout across FFI boundary
+- **Magic byte (0xCC)**: Validates packet integrity and prevents parsing garbage data
+  - Acts as protocol signature
+  - Required for all packets: `magic == 0xCC`
+  - Prevents buffer misalignment errors
 
 ## Design Decisions
 
