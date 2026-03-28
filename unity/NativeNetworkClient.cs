@@ -203,21 +203,22 @@ namespace UnityNetwork
 
     /// <summary>
     /// GameState snapshot packet.
-    /// Layout: header (18 bytes) + padding (2 bytes) + tick (4) + playerCount (4) + reserved (8) = 36 bytes
+    /// Layout: packetType (1) + magic (1) + tick (4) + playerCount (4) + reserved (8) = 18 bytes
+    /// Matches Rust's repr(C) GameState exactly
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public unsafe struct GameState
     {
-        public PacketHeader header;
-        private ushort padding; // Padding for 4-byte alignment (Rust repr(C))
+        public byte packetType;
+        public byte magic;
         public uint tick;
         public uint playerCount;
         public fixed byte reserved[8]; // Padding for future expansion
 
         public GameState(uint tick, uint playerCount)
         {
-            this.header = new PacketHeader((byte)PacketType.GameState);
-            this.padding = 0; // Initialize padding to zero
+            this.packetType = (byte)PacketType.GameState;
+            this.magic = PacketHeader.MAGIC;
             this.tick = tick;
             this.playerCount = playerCount;
             // reserved is initialized to zeros by default
@@ -225,7 +226,7 @@ namespace UnityNetwork
 
         public bool Validate()
         {
-            return header.IsValid() && header.packetType == (byte)PacketType.GameState;
+            return magic == PacketHeader.MAGIC && packetType == (byte)PacketType.GameState;
         }
     }
 
