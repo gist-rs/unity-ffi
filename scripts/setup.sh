@@ -21,27 +21,27 @@ UNITY_SCRIPTS_DIR="${PROJECT_ROOT}/unity"
 SERVER_BINARY="${BUILD_DIR}/unity-ffi-server"
 SERVER_PORT=4433
 
-# Check if target directory is provided
-if [ -z "$1" ]; then
-    echo -e "${RED}Error: Target directory not specified${NC}"
-    echo ""
-    echo "Usage: $0 <target-unity-project-path> [arm64|x86_64]"
+# Default target directory to examples/helloworld-ffi if not provided
+TARGET_DIR="${1:-${PROJECT_ROOT}/examples/helloworld-ffi}"
+BUILD_ARCH="${2:-arm64}"
+
+# Display usage if help requested
+if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    echo "Usage: $0 [target-unity-project-path] [arm64|x86_64]"
     echo ""
     echo "Arguments:"
-    echo "  target-unity-project-path  Path to Unity project directory"
+    echo "  target-unity-project-path  Path to Unity project directory (default: examples/helloworld-ffi)"
     echo "  arm64|x86_64               Architecture (default: arm64)"
     echo "                             Use x86_64 for Unity under Rosetta"
     echo ""
     echo "Example:"
+    echo "  $0                           # Uses default target: examples/helloworld-ffi"
     echo "  $0 ${PROJECT_ROOT}/examples/helloworld-ffi"
     echo "  $0 ${PROJECT_ROOT}/examples/helloworld-ffi arm64"
     echo "  $0 ${PROJECT_ROOT}/examples/helloworld-ffi x86_64"
     echo ""
-    exit 1
+    exit 0
 fi
-
-TARGET_DIR="$1"
-BUILD_ARCH="${2:-arm64}"
 
 # Parse architecture argument
 case "$BUILD_ARCH" in
