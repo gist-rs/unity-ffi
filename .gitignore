@@ -66,3 +66,6 @@ certificate_hash.txt
 # OS metadata
 Thumbs.db
 Desktop.ini
+
+# Env
+.env
