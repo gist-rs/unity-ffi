@@ -293,14 +293,14 @@ When adding a new packet type, ensure:
 
 ```
 Bytes:  03 CC 01 00 00 00 00 01 9D 34 20 D1 AC 77 F0 9D 92 65 C0 C6 F0 4A 00 00 01 00 00 00
-        │  │  │  │  └──┬─┬─┬─┘ └──────────────────┬───────────────────┘ └─┬─┘ └─┬─┘
-        │  │  │  │     │     │                    UUID                  │     │
-        │  │  │  │     │     └─ sprite_type                           │     │
-        │  │  │  │     └────── padding2 (3 bytes)                      │     │
-        │  │  │  └──────────── padding1                              │     │
-        │  │  └──────────────── operation (Create)                    │     │
-        │  └──────────────────── magic (0xCC ✓)                        │     │
-        └─────────────────────── packet_type (SpriteMessage)          └─ x  └─ y
+        │  │  │  │  │  └──┬───┘ └──────────────────┬─────────────────┘ └─┬─┘ └─┬─┘
+        │  │  │  │  │     │                       UUID                   │     │
+        │  │  │  │  │     └───── padding2                                │     │
+        │  │  │  │  └─────────── sprite_type                             │     │
+        │  │  │  └────────────── padding1                                │     │
+        │  │  └───────────────── operation (Create)                      │     │
+        │  └──────────────────── magic (0xCC ✓)                          │     │
+        └─────────────────────── packet_type (SpriteMessage)             └─ x  └─ y
 ```
 
 **Validation:**
