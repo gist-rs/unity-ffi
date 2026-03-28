@@ -339,6 +339,8 @@ The server will:
 3. Start circle motion broadcast task (sends PlayerPos updates every 50ms)
 4. Wait for Unity connections
 
+**Important**: The server must be running before you test the connection in Unity (Step 3.4).
+
 **Note**: For development, Unity can connect without providing a certificate hash. The server uses self-signed certificates automatically.
 
 ### Step 2.5: Stop the Server
@@ -388,11 +390,14 @@ cat /tmp/unity-ffi-server.log
 
 **Option A: Use Example Project**
 ```bash
-# Setup example Unity project
+# Setup example Unity project (builds and copies files, does NOT start server)
 ./scripts/setup.sh examples/helloworld-ffi
 
 # Open in Unity
 open -a Unity examples/helloworld-ffi
+
+# IMPORTANT: Start the server BEFORE testing in Unity
+./scripts/run.sh
 ```
 
 **Option B: New Project**
@@ -445,6 +450,15 @@ Unity requires explicit permission to compile unsafe code.
 
 #### 3.4 Test Connection
 
+**Before testing, make sure the server is running:**
+```bash
+# If server is not running, start it:
+./scripts/run.sh
+
+# Verify it's running:
+lsof -i:4433
+```
+
 1. **Press Play** in Unity Editor
 2. **Watch Console** for connection messages:
    ```
@@ -471,6 +485,10 @@ Unity requires explicit permission to compile unsafe code.
    - Console logs: `<color=yellow>Received Circle Motion from server at (x, y)</color>`
 
 ### Step 4: Verify Communication
+
+**Make sure both Unity and the server are running:**
+- Unity: Press Play in Editor
+- Server: Should show `Listening on wtransport://127.0.0.1:4433`
 
 #### Move the Player Object
 

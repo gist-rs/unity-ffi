@@ -523,12 +523,15 @@ namespace UnityNetwork
                 spriteCreatedCount++;
 
                 // Debug: Show position relative to player and camera
-                Vector3 playerPos = transform != null ? transform.position : Vector3.zero;
-                Vector3 cameraPos = Camera.main != null ? Camera.main.transform.position : Vector3.zero;
-                float distanceToPlayer = Vector3.Distance(spriteObj.transform.position, playerPos);
-                float distanceToCamera = Vector3.Distance(spriteObj.transform.position, cameraPos);
+                if (logPackets)
+                {
+                    Vector3 playerPos = transform != null ? transform.position : Vector3.zero;
+                    Vector3 cameraPos = Camera.main != null ? Camera.main.transform.position : Vector3.zero;
+                    float distanceToPlayer = Vector3.Distance(spriteObj.transform.position, playerPos);
+                    float distanceToCamera = Vector3.Distance(spriteObj.transform.position, cameraPos);
 
-                Debug.LogWarning($"[SPRITE DEBUG] Sprite at ({spriteMsg.x}, {spriteMsg.y}) | Player at ({playerPos.x:F1}, {playerPos.y:F1}) | Camera at ({cameraPos.x:F1}, {cameraPos.y:F1}) | Distance to player: {distanceToPlayer:F1} | Distance to camera: {distanceToCamera:F1}");
+                    Debug.Log($"[SPRITE DEBUG] Sprite at ({spriteMsg.x}, {spriteMsg.y}) | Player at ({playerPos.x:F1}, {playerPos.y:F1}) | Camera at ({cameraPos.x:F1}, {cameraPos.y:F1}) | Distance to player: {distanceToPlayer:F1} | Distance to camera: {distanceToCamera:F1}");
+                }
             }
             catch (System.Exception e)
             {
@@ -579,7 +582,7 @@ namespace UnityNetwork
                 }
                 else
                 {
-                    Debug.LogWarning($"[DELETE] Sprite {id} not found");
+                    // Sprite already deleted - DELETE is idempotent, duplicate packets are normal
                 }
             }
             catch (System.Exception e)
