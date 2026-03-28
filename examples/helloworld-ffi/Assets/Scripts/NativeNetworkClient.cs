@@ -254,13 +254,14 @@ namespace UnityNetwork
 
     /// <summary>
     /// Sprite message packet (zero-copy, Pack=1)
-    /// Layout: header(18) + operation(1) + padding1(1) + sprite_type(1) + padding2(3) + id(16) + x(2) + y(2) + padding3(2) = 46 bytes
+    /// Layout: packet_type(1) + magic(1) + operation(1) + padding1(1) + sprite_type(1) + padding2(3) + id(16) + x(2) + y(2) + padding3(2) = 30 bytes
     /// Matches Rust repr(C) exactly
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public unsafe struct SpriteMessage
     {
-        public PacketHeader header;
+        public byte packet_type;
+        public byte magic;
         public byte operation;
         private byte padding1;
         public byte sprite_type;
@@ -272,7 +273,8 @@ namespace UnityNetwork
 
         public SpriteMessage(byte operation, byte spriteType, Guid id, short x, short y)
         {
-            this.header = new PacketHeader((byte)PacketType.SpriteMessage);
+            this.packet_type = (byte)PacketType.SpriteMessage;
+            this.magic = PacketHeader.MAGIC;
             this.operation = operation;
             this.padding1 = 0;
             this.sprite_type = spriteType;
@@ -369,7 +371,7 @@ namespace UnityNetwork
         /// </summary>
         public bool Validate()
         {
-            return header.IsValid() && header.packetType == (byte)PacketType.SpriteMessage;
+            return magic == PacketHeader.MAGIC && packet_type == (byte)PacketType.SpriteMessage;
         }
     }
 
