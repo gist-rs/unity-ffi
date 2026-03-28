@@ -1,0 +1,16 @@
+[package]
+name = "test-sprite-lifecycle"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wtransport = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+unity-network = { path = "../../crates/unity-network" }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }

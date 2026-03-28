@@ -1,0 +1,46 @@
+[package]
+name = "unity-network"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "unity_network"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["unity"]
+unity = []
+unreal = []
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+
+# WebTransport networking
+wtransport = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Utilities
+hex = { workspace = true }
+rand = "0.8"
+
+# UUID generation
+uuid = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Game FFI - Unified Annotation System
+game-ffi = { version = "0.1.0", path = "../../crates/game-ffi", features = ["unity"] }
+
+[dev-dependencies]
+# Testing utilities
+tokio-test = "0.4"

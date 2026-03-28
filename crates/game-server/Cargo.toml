@@ -1,0 +1,40 @@
+[package]
+name = "unity-ffi-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "unity-ffi-server"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+
+# WebTransport networking
+wtransport = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+
+# Local dependency for shared types
+unity-network = { path = "../unity-network" }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Random number generation
+rand = "0.8"
+
+[dev-dependencies]
+# Testing utilities
+tokio-test = "0.4"

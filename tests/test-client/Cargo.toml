@@ -1,0 +1,13 @@
+[package]
+name = "test-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wtransport = { version = "0.6", features = ["self-signed", "dangerous-configuration"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unity-network = { path = "../../crates/unity-network" }
+anyhow = "1.0"
+uuid = { version = "1", features = ["v7"] }

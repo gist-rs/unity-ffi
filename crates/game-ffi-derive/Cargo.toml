@@ -1,0 +1,30 @@
+[package]
+name = "game-ffi-derive"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Procedural macros for game-ffi crate"
+
+[lib]
+proc-macro = true
+
+[features]
+default = ["unity", "unreal"]
+unity = []
+unreal = []
+
+[dependencies]
+# Procedural macro dependencies
+syn = { version = "2.0", features = ["full", "extra-traits", "parsing", "printing"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+# UUID generation
+blake3 = "1.8"
+uuid = { version = "1.20", features = ["v7", "serde"] }
+memoffset = "0.9"
+
+[dev-dependencies]
+# For testing generated code
+serde = { workspace = true }
+serde_json = { workspace = true }
