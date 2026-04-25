@@ -74,6 +74,61 @@ impl PlayerPos {
     }
 }
 
+/// Database row for recording player positions (auto schema demo).
+///
+/// Uses `#[db_table]` to auto-generate SQL DDL via `GameComponent` derive.
+/// The generated `CREATE_TABLE_SQL` and `TABLE_NAME` constants are used
+/// by the `schema_turso` example to create and query a turso SQLite database.
+///
+/// Related FFI struct: [`PlayerPos`] (network packet → this DB row for persistence)
+///
+/// ```rust
+/// use unity_network::PlayerPositionRecord;
+///
+/// // Auto-generated constants from #[db_table("player_positions")]
+/// assert_eq!(PlayerPositionRecord::TABLE_NAME, "player_positions");
+/// assert!(PlayerPositionRecord::CREATE_TABLE_SQL.contains("player_positions"));
+/// assert!(PlayerPositionRecord::CREATE_TABLE_SQL.contains("player_id"));
+/// assert!(PlayerPositionRecord::CREATE_TABLE_SQL.contains("x"));
+/// assert!(PlayerPositionRecord::CREATE_TABLE_SQL.contains("y"));
+/// ```
+#[derive(Debug, Clone, GameComponent)]
+#[game_ffi(skip_zero_copy, skip_ffi, skip_crud)]
+#[db_table("player_positions")]
+pub struct PlayerPositionRecord {
+    /// Auto-incrementing row ID (SQLite INTEGER PRIMARY KEY)
+    #[primary_key]
+    pub id: i64,
+    /// Player ID from the network packet, indexed for fast lookup
+    #[db_index(name = "idx_player_positions_player_id", on = "player_id")]
+    pub player_id: u64,
+    /// X coordinate from `PlayerPos::x`
+    pub x: f32,
+    /// Y coordinate from `PlayerPos::y`
+    pub y: f32,
+    /// Server tick when position was recorded
+    pub tick: u32,
+    /// Unix timestamp (seconds) when position was recorded
+    pub created_at: i64,
+}
+
+impl PlayerPositionRecord {
+    /// Create a new record from a `PlayerPos` network packet.
+    pub fn from_player_pos(pos: &PlayerPos, tick: u32) -> Self {
+        Self {
+            id: 0, // SQLite auto-assigns for INTEGER PRIMARY KEY
+            player_id: pos.player_id,
+            x: pos.x,
+            y: pos.y,
+            tick,
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        }
+    }
+}
+
 /// Game state snapshot packet
 /// Matches C#: [StructLayout(LayoutKind.Sequential, Pack = 1)]
 /// This is a flexible packet type that can represent different state messages

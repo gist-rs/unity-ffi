@@ -3,10 +3,13 @@
 //! Provides a safe Rust FFI interface for Unity to connect to a WebTransport server.
 //! Uses the "Caller-Allocated" pattern to avoid heap corruption between C# and Rust allocators.
 
+pub mod packet_builder;
+pub mod sprite_manager;
 pub mod types;
 pub mod webtransport;
-pub mod sprite_manager;
-pub mod packet_builder;
+
+// Re-export types used in examples and tests
+pub use types::PlayerPositionRecord;
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::panic::catch_unwind;
@@ -15,20 +18,17 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
-
-
-
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc as tokio_mpsc;
 use tracing::{error, info, warn};
 use wtransport::{ClientConfig, Connection, Endpoint};
 
-pub use types::{FfiError, PacketHeader, PacketType, PlayerPos, GameState};
 pub use types::game_state;
+pub use types::{FfiError, GameState, PacketHeader, PacketType, PlayerPos};
 
 // Sprite management types
-pub use types::{SpriteData, SpriteMessage, SpriteOp, SpriteType};
 pub use sprite_manager::SpriteManager;
+pub use types::{SpriteData, SpriteMessage, SpriteOp, SpriteType};
 
 // Maximum buffer sizes
 const PROTOCOL_VERSION: u32 = 1;
@@ -88,7 +88,10 @@ pub unsafe extern "C" fn network_init(log_callback: LogCallback) -> c_int {
         Err(_) => {
             eprintln!("Panic in network_init");
             // Try to log even if we're in panic state
-            log_to_unity("ERROR", "Panic caught during initialization - check native logs for details");
+            log_to_unity(
+                "ERROR",
+                "Panic caught during initialization - check native logs for details",
+            );
             FfiError::PanicCaught as c_int
         }
     }
@@ -135,12 +138,18 @@ pub unsafe extern "C" fn network_connect(
         // Log URL bytes for debugging (first 64 bytes)
         let url_bytes = std::slice::from_raw_parts(url as *const u8, len.min(64));
         info!("URL bytes (hex): {:02x?}", url_bytes);
-        info!("URL bytes (str): {:?}", std::str::from_utf8_unchecked(url_bytes));
+        info!(
+            "URL bytes (str): {:?}",
+            std::str::from_utf8_unchecked(url_bytes)
+        );
 
         if protocol_version != PROTOCOL_VERSION {
             log_to_unity(
                 "ERROR",
-                &format!("Protocol version mismatch: expected {}, got {}", PROTOCOL_VERSION, protocol_version),
+                &format!(
+                    "Protocol version mismatch: expected {}, got {}",
+                    PROTOCOL_VERSION, protocol_version
+                ),
             );
             return ptr::null_mut();
         }
@@ -220,7 +229,14 @@ pub unsafe extern "C" fn network_connect(
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
 
             rt.block_on(async move {
-                connect_async(url_clone, cert_hash_str, async_outbound_rx, async_inbound_tx, ready_tx).await
+                connect_async(
+                    url_clone,
+                    cert_hash_str,
+                    async_outbound_rx,
+                    async_inbound_tx,
+                    ready_tx,
+                )
+                .await
             })
         });
 
@@ -245,7 +261,10 @@ pub unsafe extern "C" fn network_connect(
         });
 
         log_to_unity("INFO", "Connection ready for use");
-        log_to_unity("DEBUG", "Bridge threads active: std::sync::mpsc ↔ tokio::sync::mpsc");
+        log_to_unity(
+            "DEBUG",
+            "Bridge threads active: std::sync::mpsc ↔ tokio::sync::mpsc",
+        );
 
         Box::into_raw(ctx) as *mut c_void
     });
@@ -305,16 +324,14 @@ pub unsafe extern "C" fn network_send(
 
         // Send to outbound channel
         match ctx.outbound_tx.as_ref() {
-            Some(tx) => {
-                match tx.send(data) {
-                    Ok(_) => FfiError::Success as c_int,
-                    Err(_) => {
-                        log_to_unity("ERROR", "Outbound channel disconnected");
-                        ctx.is_connected = false;
-                        FfiError::Disconnected as c_int
-                    }
+            Some(tx) => match tx.send(data) {
+                Ok(_) => FfiError::Success as c_int,
+                Err(_) => {
+                    log_to_unity("ERROR", "Outbound channel disconnected");
+                    ctx.is_connected = false;
+                    FfiError::Disconnected as c_int
                 }
-            }
+            },
             None => FfiError::Disconnected as c_int,
         }
     });
@@ -363,7 +380,11 @@ pub unsafe extern "C" fn network_poll(
                         if data.len() > capacity {
                             log_to_unity(
                                 "WARN",
-                                &format!("Buffer too small: need {}, have {}", data.len(), capacity),
+                                &format!(
+                                    "Buffer too small: need {}, have {}",
+                                    data.len(),
+                                    capacity
+                                ),
                             );
                             return FfiError::BufferTooSmall as c_int;
                         }
@@ -450,7 +471,10 @@ async fn connect_async(
         .with_no_cert_validation()
         .build();
 
-    log_to_unity("INFO", "Using client config with certificate validation bypassed (development mode)");
+    log_to_unity(
+        "INFO",
+        "Using client config with certificate validation bypassed (development mode)",
+    );
 
     // Create endpoint for client connections
     let endpoint = match Endpoint::client(client_config) {
@@ -532,14 +556,21 @@ async fn connect_async(
 
         loop {
             // Add timeout to detect if receive_datagram is blocking
-            match tokio::time::timeout(Duration::from_secs(1), connection.receive_datagram()).await {
+            match tokio::time::timeout(Duration::from_secs(1), connection.receive_datagram()).await
+            {
                 Ok(Ok(data)) => {
                     packets_received += 1;
                     no_data_count = 0; // Reset counter on success
 
                     if packets_received == 1 {
-                        info!("Inbound task: First packet received, size: {} bytes", data.len());
-                        log_to_unity("INFO", &format!("First packet received: {} bytes", data.len()));
+                        info!(
+                            "Inbound task: First packet received, size: {} bytes",
+                            data.len()
+                        );
+                        log_to_unity(
+                            "INFO",
+                            &format!("First packet received: {} bytes", data.len()),
+                        );
                     }
                     if packets_received.is_multiple_of(100) {
                         info!("Inbound task: {} packets received", packets_received);
@@ -561,10 +592,15 @@ async fn connect_async(
                     // Timeout - receive_datagram is blocking
                     no_data_count += 1;
                     if no_data_count == 1 {
-                        warn!("Inbound task: receive_datagram timed out (1s) - no data received yet");
+                        warn!(
+                            "Inbound task: receive_datagram timed out (1s) - no data received yet"
+                        );
                     }
                     if no_data_count.is_multiple_of(10) {
-                        warn!("Inbound task: Still no data after {} seconds", no_data_count);
+                        warn!(
+                            "Inbound task: Still no data after {} seconds",
+                            no_data_count
+                        );
                     }
                     if no_data_count > 30 {
                         error!("Inbound task: No data for 30 seconds, closing");
@@ -575,7 +611,10 @@ async fn connect_async(
             }
         }
 
-        info!("Inbound task ended, total packets received: {}", packets_received);
+        info!(
+            "Inbound task ended, total packets received: {}",
+            packets_received
+        );
     });
 
     // Keep async task alive

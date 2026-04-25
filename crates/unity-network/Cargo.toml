@@ -44,3 +44,6 @@ game-ffi = { version = "0.1.0", path = "../../crates/game-ffi", features = ["uni
 [dev-dependencies]
 # Testing utilities
 tokio-test = "0.4"
+
+# Turso SQLite (local, encryption-capable) for schema examples
+turso = "0.5.3"
