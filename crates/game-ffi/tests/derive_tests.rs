@@ -6,6 +6,7 @@ use game_ffi::GameComponent;
 // Default Mode (field signature hashing) - Recommended for most cases
 // ============================================================================
 
+#[repr(C)]
 #[derive(GameComponent)]
 pub struct PlayerPosition {
     pub x: f32,
@@ -13,6 +14,7 @@ pub struct PlayerPosition {
     pub z: f32,
 }
 
+#[repr(C)]
 #[derive(GameComponent)]
 pub struct GameState {
     pub tick: u64,
@@ -23,6 +25,7 @@ pub struct GameState {
 // Strict Mode (hash = "all") - For validation-critical protocols
 // ============================================================================
 
+#[repr(C)]
 #[derive(GameComponent)]
 #[hash = "all"]
 pub struct ServerConfig {
@@ -35,6 +38,7 @@ pub struct ServerConfig {
 // Loose Mode (hash = "name") - For rapid prototyping
 // ============================================================================
 
+#[repr(C)]
 #[derive(GameComponent)]
 #[hash = "name"]
 pub struct ProtoState {
@@ -45,6 +49,7 @@ pub struct ProtoState {
 // Manual UUID Mode - For explicit control (legacy/special cases)
 // ============================================================================
 
+#[repr(C)]
 #[derive(GameComponent)]
 #[uuid = "fc8bd668-fc0a-4ab7-8b3d-f0f22bb539e2"]
 pub struct LegacyComponent {
@@ -55,6 +60,7 @@ pub struct LegacyComponent {
 // Complex Types
 // ============================================================================
 
+#[repr(C)]
 #[derive(GameComponent)]
 pub struct EntityUpdate {
     pub entity_id: u64,
@@ -67,6 +73,7 @@ pub struct EntityUpdate {
     pub _padding: u16,
 }
 
+#[repr(C)]
 #[derive(GameComponent)]
 #[unity(name = "PlayerPosUnity")]
 pub struct PlayerPos {
@@ -76,6 +83,7 @@ pub struct PlayerPos {
     pub y: f32,
 }
 
+#[repr(C)]
 #[derive(GameComponent)]
 #[unreal(class = "FCharacterUpdate", blueprint_type)]
 pub struct CharacterUpdate {
@@ -84,6 +92,7 @@ pub struct CharacterUpdate {
     pub y: u16,
 }
 
+#[repr(C)]
 #[derive(GameComponent)]
 pub struct PacketHeader {
     pub packet_type: u8,
