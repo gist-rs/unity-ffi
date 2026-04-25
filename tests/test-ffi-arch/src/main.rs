@@ -311,19 +311,19 @@ async fn main() -> Result<()> {
                         if data.len() >= mem::size_of::<PlayerPos>() {
                             let pos = unsafe { *(data.as_ptr() as *const PlayerPos) };
 
-                            if pos.player_id == 999 {
+                            if pos.pos.player_id == 999 {
                                 if last_circle_update.is_none() {
                                     info!("🎯 First circle motion received from server!");
                                 }
-                                last_circle_update = Some((pos.x, pos.y));
+                                last_circle_update = Some((pos.pos.x, pos.pos.y));
                                 info!(
                                     "📥 [MAIN] Circle motion: player_id={}, x={:.2}, y={:.2}",
-                                    pos.player_id, pos.x, pos.y
+                                    pos.pos.player_id, pos.pos.x, pos.pos.y
                                 );
                             } else {
                                 info!(
                                     "📥 [MAIN] PlayerPos: player_id={}, x={:.2}, y={:.2}",
-                                    pos.player_id, pos.x, pos.y
+                                    pos.pos.player_id, pos.pos.x, pos.pos.y
                                 );
                             }
                         }

@@ -76,9 +76,11 @@ pub unsafe extern "C" fn packet_builder_create_player_pos(
             packet_type: PacketType::PlayerPos as u8,
             magic: 0xCC,
             request_uuid,
-            player_id: player_uuid.as_u128() as u64,
-            x: x as f32,
-            y: y as f32,
+            pos: crate::types::Position2D {
+                player_id: player_uuid.as_u128() as u64,
+                x: x as f32,
+                y: y as f32,
+            },
         };
 
         // Use GameComponent's as_bytes() method for zero-copy conversion
@@ -353,8 +355,8 @@ mod tests {
             let packet = PlayerPos::from_bytes(&buffer[..result as usize]);
             assert!(packet.validate().is_ok());
             assert_eq!(packet.packet_type, PacketType::PlayerPos as u8);
-            assert_eq!(packet.x, 100.0);
-            assert_eq!(packet.y, 200.0);
+            assert_eq!(packet.pos.x, 100.0);
+            assert_eq!(packet.pos.y, 200.0);
         }
     }
 

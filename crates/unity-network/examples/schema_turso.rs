@@ -1,63 +1,75 @@
-//! # Auto Schema with Turso SQLite Example
+//! # Auto Schema + Turso SQLite with Position2D Composition
 //!
-//! Demonstrates how `#[db_table]` + `#[derive(GameComponent)]` auto-generates
-//! SQL DDL that works directly with turso (libSQL) SQLite databases.
-//!
-//! This example simulates receiving `PlayerPos` network packets (like from
-//! the `helloworld-ffi` Unity example) and records them to a turso in-memory
-//! database using the auto-generated schema from `PlayerPositionRecord`.
+//! Demonstrates `#[db_flatten]` — the single source of truth pattern where
+//! `Position2D` is shared between the FFI packet (`PlayerPos`) and the DB row
+//! (`PlayerPositionRecord`) with zero field duplication.
 //!
 //! ## What it shows:
-//! 1. Auto-generated `TABLE_NAME`, `CREATE_TABLE_SQL`, `CREATE_INDEXES_SQL`
-//! 2. Creating a turso SQLite database with auto-generated DDL
-//! 3. Recording player positions: `PlayerPos` (FFI packet) → `PlayerPositionRecord` (DB row)
-//! 4. Querying by player_id (uses auto-generated index)
+//! 1. `Position2D` — shared payload with own `#[db_table]` schema
+//! 2. `PlayerPos` — FFI packet embedding `Position2D` (flat memory via nested `#[repr(C)]`)
+//! 3. `PlayerPositionRecord` — DB row with `#[db_flatten]` expanding `Position2D` columns
+//! 4. `create_table_sql()` — runtime SQL composition (const can't concat flattened columns)
 //!
 //! Run with: `cargo run --package unity-network --example schema_turso`
 
-use unity_network::{PlayerPos, PlayerPositionRecord};
+use unity_network::{PlayerPos, PlayerPositionRecord, Position2D};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("=== Auto Schema + Turso SQLite Demo ===\n");
+    println!("=== Auto Schema + Turso SQLite with Position2D Composition ===\n");
 
-    // ── Step 1: Inspect auto-generated schema ───────────────────────────
-    println!("Auto-generated from #[db_table(\"player_positions\", skip_crud)]:\n");
-    println!("  TABLE_NAME : {}", PlayerPositionRecord::TABLE_NAME);
-    println!("  Columns    : {:?}", PlayerPositionRecord::column_names());
+    // ── Step 1: Inspect Position2D (shared payload) ────────────────────
+    println!("Shared payload (single source of truth):");
+    println!("  TABLE_NAME  : {}", Position2D::TABLE_NAME);
+    println!("  Columns     : {:?}", Position2D::column_names());
+    println!("  CREATE TABLE:");
+    for line in Position2D::CREATE_TABLE_SQL.lines() {
+        println!("    {line}");
+    }
+    println!();
+
+    // ── Step 2: Inspect PlayerPositionRecord (DB row with flatten) ─────
+    println!("DB record (with #[db_flatten] on pos: Position2D):");
+    println!("  TABLE_NAME  : {}", PlayerPositionRecord::TABLE_NAME);
+    println!("  Own columns : {:?}", PlayerPositionRecord::column_names());
     println!(
-        "  Primary key: {:?}\n",
+        "  Primary key : {:?}",
         PlayerPositionRecord::primary_key_field()
     );
-    println!("  CREATE TABLE SQL:");
-    for line in PlayerPositionRecord::CREATE_TABLE_SQL.lines() {
-        println!("    {line}");
-    }
     println!();
-    println!("  CREATE INDEX SQL:");
-    for line in PlayerPositionRecord::CREATE_INDEXES_SQL.lines() {
+
+    println!("  Composed CREATE TABLE (runtime via create_table_sql()):");
+    let create_sql = PlayerPositionRecord::create_table_sql();
+    for line in create_sql.lines() {
         println!("    {line}");
     }
     println!();
 
-    // ── Step 2: Create turso in-memory database ─────────────────────────
+    if !PlayerPositionRecord::CREATE_INDEXES_SQL.is_empty() {
+        println!("  CREATE INDEX:");
+        for line in PlayerPositionRecord::CREATE_INDEXES_SQL.lines() {
+            println!("    {line}");
+        }
+        println!();
+    }
+
+    // ── Step 3: Create turso in-memory database ─────────────────────────
     let db = turso::Builder::new_local(":memory:").build().await?;
     let conn = db.connect()?;
     println!("[ok] Turso in-memory database created");
 
-    // ── Step 3: Execute auto-generated DDL ──────────────────────────────
-    conn.execute(PlayerPositionRecord::CREATE_TABLE_SQL, ())
+    // ── Step 4: Execute composed DDL ────────────────────────────────────
+    conn.execute(PlayerPositionRecord::create_table_sql(), ())
         .await?;
     conn.execute(PlayerPositionRecord::CREATE_INDEXES_SQL, ())
         .await?;
-    println!("[ok] Table + index created using auto-generated DDL\n");
+    println!("[ok] Table + index created using composed DDL\n");
 
-    // ── Step 4: Simulate PlayerPos packets → DB records ─────────────────
-    // These represent positions arriving from Unity via WebTransport,
-    // just like the helloworld-ffi example sends PlayerPos packets.
+    // ── Step 5: Simulate PlayerPos packets → DB records ─────────────────
+    // Each packet embeds Position2D — converting to DB row is just `packet.pos`
     let simulated_packets: [(u64, f32, f32); 6] = [
-        (1, 10.0, 20.0), // Player 1 spawns at (10, 20)
-        (2, 30.5, 40.5), // Player 2 spawns at (30.5, 40.5)
+        (1, 10.0, 20.0), // Player 1 spawns
+        (2, 30.5, 40.5), // Player 2 spawns
         (1, 11.0, 21.0), // Player 1 moves
         (3, 50.0, 60.0), // Player 3 spawns
         (2, 31.5, 42.0), // Player 2 moves
@@ -65,21 +77,21 @@ async fn main() -> anyhow::Result<()> {
     ];
 
     for (tick, &(player_id, x, y)) in simulated_packets.iter().enumerate() {
-        // Create a PlayerPos FFI packet (same struct helloworld-ffi uses)
+        // FFI packet: header + Position2D payload
         let request_uuid = uuid::Uuid::now_v7();
         let packet = PlayerPos::new(request_uuid, player_id, x, y);
 
-        // Convert FFI packet → DB record using the auto-annotated struct
+        // DB record: metadata + same Position2D payload (just `packet.pos`)
         let record = PlayerPositionRecord::from_player_pos(&packet, tick as u32);
 
-        // Insert with SQLite parameterized query (?1..?5 style)
+        // INSERT uses flattened column names (player_id, x, y from Position2D)
         conn.execute(
             "INSERT INTO player_positions (player_id, x, y, tick, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
             [
-                turso::Value::Integer(record.player_id as i64),
-                turso::Value::Real(record.x as f64),
-                turso::Value::Real(record.y as f64),
+                turso::Value::Integer(record.pos.player_id as i64),
+                turso::Value::Real(record.pos.x as f64),
+                turso::Value::Real(record.pos.y as f64),
                 turso::Value::Integer(record.tick as i64),
                 turso::Value::Integer(record.created_at),
             ],
@@ -91,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
         simulated_packets.len()
     );
 
-    // ── Step 5: Query all positions ─────────────────────────────────────
+    // ── Step 6: Query all positions ─────────────────────────────────────
     println!("All Player Positions (ordered by id):");
     println!(
         "  {:<5} {:<10} {:<10} {:<10} {:<8} {:<12}",
@@ -123,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
     }
     println!("  Total: {count} records\n");
 
-    // ── Step 6: Query by player_id (uses auto-generated index) ──────────
+    // ── Step 7: Query by player_id (uses auto-generated index) ──────────
     let target_player: u64 = 1;
     println!("Player {target_player} trail (uses idx_player_positions_player_id):");
 
@@ -142,12 +154,13 @@ async fn main() -> anyhow::Result<()> {
         println!("  tick {tick}: ({x:.1}, {y:.1})");
     }
 
-    // ── Step 7: Summary ─────────────────────────────────────────────────
+    // ── Step 8: Summary ─────────────────────────────────────────────────
     println!("\n=== Summary ===");
-    println!("[ok] #[db_table] -> auto-generated DDL works with turso SQLite");
-    println!("[ok] PlayerPos (FFI packet) -> PlayerPositionRecord (DB row)");
-    println!("[ok] #[db_index] -> auto-generated index for fast player lookups");
-    println!("[ok] Parameterized queries (?1, ?2, ...) prevent SQL injection");
+    println!("[ok] Position2D — single source of truth for player_id, x, y");
+    println!("[ok] PlayerPos — FFI packet with embedded Position2D (flat memory)");
+    println!("[ok] PlayerPositionRecord — DB row with #[db_flatten] expanding Position2D");
+    println!("[ok] create_table_sql() — runtime composition with Position2D::COLUMN_DEFS_SQL");
+    println!("[ok] Adding z/rotation/velocity to Position2D auto-propagates everywhere");
     println!();
     println!("Tip: Try persisting to disk: change \":memory:\" to \"positions.db\"");
 

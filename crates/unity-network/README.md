@@ -151,13 +151,24 @@ All packets use `#[repr(C)]` with `#[derive(GameComponent)]` for guaranteed memo
 | `GameState` | Server state snapshot | `tick`, `player_count`, `reserved` |
 | `SpriteMessage` | Sprite CRUD operations | `operation`, `sprite_type`, `id`, `x`, `y` |
 
-## Database Types
+## Single Source of Truth — `Position2D`
 
-| Struct | Table | Purpose |
-|--------|-------|---------|
-| `PlayerPositionRecord` | `player_positions` | Persist player positions from `PlayerPos` packets |
+Position fields are defined **once** in `Position2D` and shared between the FFI packet and DB row via composition:
 
-Annotated with `#[db_table]` + `#[db_index]` for auto DDL generation. Uses `#[game_ffi(skip_crud)]` since CRUD queries are written manually for turso (generated CRUD targets sqlx/PostgreSQL).
+```
+Position2D (player_id, x, y)
+    ├── PlayerPos          (FFI packet = header + Position2D)
+    └── PlayerPositionRecord (DB row = metadata + Position2D via #[db_flatten])
+```
+
+Adding `z`, `rotation`, `velocity` etc. to `Position2D` auto-propagates everywhere.
+
+| Struct | Table | Role |
+|--------|-------|------|
+| `Position2D` | `position_2d` | Shared position payload (single source of truth) |
+| `PlayerPositionRecord` | `player_positions` | DB row with `#[db_flatten]` expanding `Position2D` columns |
+
+All annotated with `#[db_table]` for auto DDL. Uses `#[game_ffi(skip_crud)]` since CRUD queries are written manually for turso (generated CRUD targets sqlx/PostgreSQL).
 
 ## Examples
 
@@ -171,21 +182,42 @@ Annotated with `#[db_table]` + `#[db_index]` for auto DDL generation. Uses `#[ga
 
 ## Quick Start
 
-### Define a DB-backed struct
+### Define shared payload + FFI packet + DB record
 
 ```rust
 use game_ffi::GameComponent;
 
-#[derive(Debug, Clone, GameComponent)]
+// 1. Shared payload — single source of truth for position data
+#[repr(C)]
+#[derive(Debug, Clone, Copy, GameComponent)]
 #[game_ffi(skip_zero_copy, skip_ffi, skip_crud)]
-#[db_table("player_positions")]
-pub struct PlayerPositionRecord {
-    #[primary_key]
-    pub id: i64,
-    #[db_index(name = "idx_player_positions_player_id", on = "player_id")]
+#[db_table("position_2d")]
+pub struct Position2D {
     pub player_id: u64,
     pub x: f32,
     pub y: f32,
+}
+
+// 2. FFI packet = header + shared payload
+#[repr(C)]
+#[derive(GameComponent, Debug, Clone, Copy)]
+pub struct PlayerPos {
+    pub packet_type: u8,
+    pub magic: u8,
+    pub request_uuid: uuid::Uuid,
+    pub pos: Position2D,
+}
+
+// 3. DB record = metadata + flattened shared payload
+#[derive(Debug, Clone, GameComponent)]
+#[game_ffi(skip_zero_copy, skip_ffi, skip_crud)]
+#[db_table("player_positions")]
+#[db_index(name = "idx_player_positions_player_id", on = "player_id")]
+pub struct PlayerPositionRecord {
+    #[primary_key]
+    pub id: i64,
+    #[db_flatten]  // expands Position2D columns into this table
+    pub pos: Position2D,
     pub tick: u32,
     pub created_at: i64,
 }
@@ -197,16 +229,20 @@ pub struct PlayerPositionRecord {
 let db = turso::Builder::new_local(":memory:").build().await?;
 let conn = db.connect()?;
 
-// Auto-generated DDL — no hand-written SQL for schema
-conn.execute(PlayerPositionRecord::CREATE_TABLE_SQL, ()).await?;
+// Composed DDL — #[db_flatten] uses runtime composition (fn, not const)
+conn.execute(PlayerPositionRecord::create_table_sql(), ()).await?;
 conn.execute(PlayerPositionRecord::CREATE_INDEXES_SQL, ()).await?;
 
-// Insert with parameterized query
+// FFI packet → DB record: just copy the shared payload
+let packet = PlayerPos::new(uuid::Uuid::now_v7(), player_id, x, y);
+let record = PlayerPositionRecord::from_player_pos(&packet, tick);
+
+// Insert with parameterized query (flattened columns: player_id, x, y)
 conn.execute(
     "INSERT INTO player_positions (player_id, x, y, tick, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-    [turso::Value::Integer(player_id as i64), turso::Value::Real(x as f64),
-     turso::Value::Real(y as f64), turso::Value::Integer(tick as i64),
-     turso::Value::Integer(created_at)],
+    [turso::Value::Integer(record.pos.player_id as i64), turso::Value::Real(record.pos.x as f64),
+     turso::Value::Real(record.pos.y as f64), turso::Value::Integer(record.tick as i64),
+     turso::Value::Integer(record.created_at)],
 ).await?;
 
 // Query by indexed column
@@ -240,9 +276,20 @@ while let Some(row) = rows.next().await? {
 | Attribute | Purpose |
 |-----------|---------|
 | `#[primary_key]` | Mark as primary key column |
+| `#[db_flatten]` | Expand embedded struct's columns into parent table |
 | `#[db_index(name = "...", on = "...")]` | Generate CREATE INDEX |
 | `#[db_default("value")]` | SQL DEFAULT value |
 | `#[db_column(TYPE, CONSTRAINTS)]` | Override SQL column type |
+
+### `#[db_flatten]` behavior
+
+| Aspect | Without `#[db_flatten]` | With `#[db_flatten]` |
+|--------|------------------------|---------------------|
+| `CREATE_TABLE_SQL` | `const &'static str` | `fn create_table_sql() -> String` |
+| `COLUMN_DEFS_SQL` | All columns | Own columns only (excludes flattened) |
+| `column_names()` | All fields | Own fields only (excludes flattened) |
+| Flattened type requirement | N/A | Must have `#[db_table]` (for `COLUMN_DEFS_SQL`) |
+| Adding fields to shared type | N/A | Auto-propagates to all users |
 
 ## Feature Flags
 

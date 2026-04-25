@@ -8,11 +8,11 @@ use std::mem;
 use std::time::Duration;
 use tokio::time::{interval, timeout};
 use tracing::{error, info, warn};
+use unity_network::{GameState, PacketHeader, PacketType, PlayerPos};
 use uuid::Uuid;
 use wtransport::endpoint::Endpoint;
 use wtransport::ClientConfig;
 use wtransport::Connection;
-use unity_network::{GameState, PacketHeader, PacketType, PlayerPos};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -73,44 +73,48 @@ async fn main() -> Result<()> {
 
                     // Parse packet header
                     if data.len() >= mem::size_of::<PacketHeader>() {
-                        let header = unsafe {
-                            *(data.as_ptr() as *const PacketHeader)
-                        };
+                        let header = unsafe { *(data.as_ptr() as *const PacketHeader) };
 
                         if header.is_valid() {
                             match PacketType::from_u8(header.packet_type) {
                                 Some(PacketType::PlayerPos) => {
                                     if data.len() >= mem::size_of::<PlayerPos>() {
-                                        let pos = unsafe {
-                                            *(data.as_ptr() as *const PlayerPos)
-                                        };
-                                        info!("📥 [RECV] PlayerPos: player_id={}, x={:.2}, y={:.2}",
-                                              pos.player_id, pos.x, pos.y);
+                                        let pos = unsafe { *(data.as_ptr() as *const PlayerPos) };
+                                        info!(
+                                            "📥 [RECV] PlayerPos: player_id={}, x={:.2}, y={:.2}",
+                                            pos.pos.player_id, pos.pos.x, pos.pos.y
+                                        );
 
-                                        if pos.player_id == 999 {
+                                        if pos.pos.player_id == 999 {
                                             info!("🎯 This is the circle motion from server!");
                                         }
                                     }
                                 }
                                 Some(PacketType::GameState) => {
                                     if data.len() >= mem::size_of::<GameState>() {
-                                        let state = unsafe {
-                                            *(data.as_ptr() as *const GameState)
-                                        };
-                                        info!("📥 [RECV] GameState: tick={}, player_count={}",
-                                              state.tick, state.player_count);
+                                        let state = unsafe { *(data.as_ptr() as *const GameState) };
+                                        info!(
+                                            "📥 [RECV] GameState: tick={}, player_count={}",
+                                            state.tick, state.player_count
+                                        );
                                     }
                                 }
                                 Some(PacketType::KeepAlive) => {
                                     info!("📥 [RECV] KeepAlive");
                                 }
                                 Some(PacketType::SpriteMessage) => {
-                                    if data.len() >= mem::size_of::<unity_network::SpriteMessage>() {
+                                    if data.len() >= mem::size_of::<unity_network::SpriteMessage>()
+                                    {
                                         let sprite_msg = unsafe {
                                             *(data.as_ptr() as *const unity_network::SpriteMessage)
                                         };
-                                        info!("📥 [RECV] SpriteMessage: op={:?}, id={:?}, x={}, y={}",
-                                              sprite_msg.get_operation(), sprite_msg.get_id(), sprite_msg.x, sprite_msg.y);
+                                        info!(
+                                            "📥 [RECV] SpriteMessage: op={:?}, id={:?}, x={}, y={}",
+                                            sprite_msg.get_operation(),
+                                            sprite_msg.get_id(),
+                                            sprite_msg.x,
+                                            sprite_msg.y
+                                        );
                                     }
                                 }
                                 None => {
@@ -146,7 +150,10 @@ async fn main() -> Result<()> {
             }
         }
 
-        info!("📥 Receiver ended, total packets received: {}", packets_received);
+        info!(
+            "📥 Receiver ended, total packets received: {}",
+            packets_received
+        );
     });
 
     // Send test packets every 100ms
@@ -178,7 +185,7 @@ async fn main() -> Result<()> {
                     Ok(_) => {
                         packets_sent += 1;
                         info!("📤 [SEND] PlayerPos #{}: id={}, x={:.2}, y={:.2}, size={} bytes",
-                              packets_sent, player_id, pos.x, pos.y, bytes.len());
+                              packets_sent, player_id, pos.pos.x, pos.pos.y, bytes.len());
                         if packets_sent.is_multiple_of(50) {
                             info!("📊 Send progress: {} packets sent", packets_sent);
                         }

@@ -47,7 +47,25 @@ impl PacketHeader {
     }
 }
 
-/// Player position update packet
+/// Shared position data — single source of truth for player coordinates.
+///
+/// Embedded in both [`PlayerPos`] (FFI network packet) and [`PlayerPositionRecord`] (DB row)
+/// so position fields are defined exactly once. Adding `z`, `rotation`, etc. here
+/// automatically propagates to both wire format and persistence.
+///
+/// Requires `#[repr(C)]` because it's embedded inside `#[repr(C)]` FFI structs
+/// (nested `repr(C)` guarantees flat memory layout).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, GameComponent)]
+#[game_ffi(skip_zero_copy, skip_ffi, skip_crud)]
+#[db_table("position_2d")]
+pub struct Position2D {
+    pub player_id: u64,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Player position update packet (header + shared position payload).
 /// Matches C#: [StructLayout(LayoutKind.Sequential, Pack = 1)]
 /// Auto-generates: PlayerPos::UUID, PlayerPos::size(), PlayerPos::as_bytes(), PlayerPos::from_bytes()
 #[repr(C)]
@@ -56,9 +74,7 @@ pub struct PlayerPos {
     pub packet_type: u8,
     pub magic: u8,
     pub request_uuid: uuid::Uuid,
-    pub player_id: u64,
-    pub x: f32,
-    pub y: f32,
+    pub pos: Position2D,
 }
 
 impl PlayerPos {
@@ -67,9 +83,7 @@ impl PlayerPos {
             packet_type: PacketType::PlayerPos as u8,
             magic: PacketHeader::MAGIC,
             request_uuid,
-            player_id,
-            x,
-            y,
+            pos: Position2D { player_id, x, y },
         }
     }
 }
@@ -77,8 +91,11 @@ impl PlayerPos {
 /// Database row for recording player positions (auto schema demo).
 ///
 /// Uses `#[db_table]` to auto-generate SQL DDL via `GameComponent` derive.
-/// The generated `CREATE_TABLE_SQL` and `TABLE_NAME` constants are used
+/// The generated `create_table_sql()` and `TABLE_NAME` constants are used
 /// by the `schema_turso` example to create and query a turso SQLite database.
+///
+/// The shared position payload ([`Position2D`]) is flattened into this table's
+/// columns via `#[db_flatten]` — single source of truth, zero field duplication.
 ///
 /// Related FFI struct: [`PlayerPos`] (network packet → this DB row for persistence)
 ///
@@ -87,25 +104,22 @@ impl PlayerPos {
 ///
 /// // Auto-generated constants from #[db_table("player_positions")]
 /// assert_eq!(PlayerPositionRecord::TABLE_NAME, "player_positions");
-/// assert!(PlayerPositionRecord::CREATE_TABLE_SQL.contains("player_positions"));
-/// assert!(PlayerPositionRecord::CREATE_TABLE_SQL.contains("player_id"));
-/// assert!(PlayerPositionRecord::CREATE_TABLE_SQL.contains("x"));
-/// assert!(PlayerPositionRecord::CREATE_TABLE_SQL.contains("y"));
+/// assert!(PlayerPositionRecord::create_table_sql().contains("player_positions"));
+/// assert!(PlayerPositionRecord::create_table_sql().contains("player_id"));
+/// assert!(PlayerPositionRecord::create_table_sql().contains("x"));
+/// assert!(PlayerPositionRecord::create_table_sql().contains("y"));
 /// ```
 #[derive(Debug, Clone, GameComponent)]
 #[game_ffi(skip_zero_copy, skip_ffi, skip_crud)]
 #[db_table("player_positions")]
+#[db_index(name = "idx_player_positions_player_id", on = "player_id")]
 pub struct PlayerPositionRecord {
     /// Auto-incrementing row ID (SQLite INTEGER PRIMARY KEY)
     #[primary_key]
     pub id: i64,
-    /// Player ID from the network packet, indexed for fast lookup
-    #[db_index(name = "idx_player_positions_player_id", on = "player_id")]
-    pub player_id: u64,
-    /// X coordinate from `PlayerPos::x`
-    pub x: f32,
-    /// Y coordinate from `PlayerPos::y`
-    pub y: f32,
+    /// Shared position payload — flattened into player_id, x, y columns
+    #[db_flatten]
+    pub pos: Position2D,
     /// Server tick when position was recorded
     pub tick: u32,
     /// Unix timestamp (seconds) when position was recorded
@@ -114,12 +128,10 @@ pub struct PlayerPositionRecord {
 
 impl PlayerPositionRecord {
     /// Create a new record from a `PlayerPos` network packet.
-    pub fn from_player_pos(pos: &PlayerPos, tick: u32) -> Self {
+    pub fn from_player_pos(packet: &PlayerPos, tick: u32) -> Self {
         Self {
             id: 0, // SQLite auto-assigns for INTEGER PRIMARY KEY
-            player_id: pos.player_id,
-            x: pos.x,
-            y: pos.y,
+            pos: packet.pos,
             tick,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -392,10 +404,10 @@ mod tests {
     fn test_player_pos_validation() {
         let request_uuid = uuid::Uuid::now_v7();
         let pos = PlayerPos::new(request_uuid, 42, 10.5, 20.3);
-        assert_eq!(pos.player_id, 42);
+        assert_eq!(pos.pos.player_id, 42);
         assert_eq!(pos.request_uuid, request_uuid);
-        assert_eq!(pos.x, 10.5);
-        assert_eq!(pos.y, 20.3);
+        assert_eq!(pos.pos.x, 10.5);
+        assert_eq!(pos.pos.y, 20.3);
     }
 
     #[test]

@@ -9,7 +9,7 @@ pub mod types;
 pub mod webtransport;
 
 // Re-export types used in examples and tests
-pub use types::PlayerPositionRecord;
+pub use types::{PlayerPositionRecord, Position2D};
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::panic::catch_unwind;
