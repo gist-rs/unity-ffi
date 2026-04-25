@@ -4,6 +4,7 @@
 //! `#[derive(GameComponent)]` attribute.
 
 pub mod attributes;
+pub mod schema;
 pub mod unity;
 pub mod unreal;
 

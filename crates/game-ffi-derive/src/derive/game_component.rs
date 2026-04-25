@@ -1,12 +1,24 @@
 //! Main implementation of the GameComponent derive macro
 //!
 //! This module contains the core procedural macro logic for `#[derive(GameComponent)]`.
+//!
+//! ## Plan 082: Schema-Driven Database
+//!
+//! When a struct has `#[db_table("name")]`, the macro also generates:
+//! - `CREATE TABLE SQL` constant
+//! - `CREATE INDEX SQL` constant (if indexes defined)
+//! - `TABLE_NAME` constant
+//! - `column_names()`, `column_count()`, `primary_key_field()` methods
 
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
 use syn::{parse_macro_input, Data, DataEnum, DataStruct, DeriveInput, Error, Ident, Type};
 
-use super::attributes::{parse_struct_attributes, FieldAttributes, HashMode, StructAttributes};
+use super::attributes::{
+    parse_field_attributes, parse_struct_attributes, FieldAttributes, HashMode, StructAttributes,
+};
+use super::schema::sql_gen::generate_schema_impl;
+use super::schema::types::{DbFieldInfo, DbSchemaInfo};
 
 /// Information about a struct field needed for signature hashing
 #[derive(Clone)]
@@ -90,20 +102,41 @@ fn impl_game_component(input: DeriveInput) -> Result<proc_macro2::TokenStream, E
         generate_validation_impl(struct_name, &fields)
     };
 
-    // Generate layout verification
-    let layout_verify = generate_layout_verify(struct_name);
+    // Generate layout verification (only for zero-copy types)
+    let layout_verify = if struct_attrs.skip_zero_copy {
+        quote! {}
+    } else {
+        generate_layout_verify(struct_name)
+    };
 
     // Generate UUID constant
     let uuid_const = generate_uuid_constant(struct_name, &uuid);
 
-    // Generate FFI wrapper functions
-    let ffi_functions = generate_ffi_functions(struct_name, &struct_attrs);
+    // Generate FFI wrapper functions (conditionally based on skip_ffi flag)
+    let ffi_functions = if struct_attrs.skip_ffi {
+        quote! {}
+    } else {
+        generate_ffi_functions(struct_name, &struct_attrs)
+    };
 
     // Check feature flags for engine-specific code generation
     let unity_bindings = cfg!(feature = "unity")
         .then(|| generate_unity_bindings(struct_name, &struct_attrs, &fields_with_layout, &uuid));
     let unreal_bindings =
         cfg!(feature = "unreal").then(|| generate_unreal_bindings(struct_name, &struct_attrs));
+
+    // Plan 082: Generate database schema code if #[db_table("...")] is present
+    let schema_impl = if let Some(ref db_table) = struct_attrs.db_table {
+        let db_schema = build_db_schema_info(
+            &struct_name_str,
+            db_table.table_name.clone(),
+            &input,
+            &struct_attrs,
+        )?;
+        Some(generate_schema_impl(struct_name, &db_schema))
+    } else {
+        None
+    };
 
     // Combine all generated code
     // Note: Order matters - struct must be defined before impl blocks are processed
@@ -122,6 +155,9 @@ fn impl_game_component(input: DeriveInput) -> Result<proc_macro2::TokenStream, E
 
         // FFI wrapper functions (includes Default impl)
         #ffi_functions
+
+        // Plan 082: Database schema SQL constants and helpers
+        #schema_impl
 
         // Unity C# bindings (conditional)
         #unity_bindings
@@ -200,6 +236,80 @@ fn extract_variant_info(data_enum: &DataEnum) -> Result<Vec<FieldInfo>, Error> {
     Ok(variants)
 }
 
+// ============================================================================
+// Plan 082: Database Schema Extraction
+// ============================================================================
+
+/// Extract database schema info from a struct for SQL generation.
+///
+/// Collects field-level `#[primary_key]`, `#[db_column]`, `#[db_default]`, `#[db_index]`
+/// attributes and combines them with table-level attributes into a `DbSchemaInfo`.
+fn build_db_schema_info(
+    struct_name: &str,
+    table_name: String,
+    input: &DeriveInput,
+    struct_attrs: &StructAttributes,
+) -> Result<DbSchemaInfo, Error> {
+    let fields = match &input.data {
+        Data::Struct(data_struct) => extract_db_field_info(data_struct)?,
+        Data::Enum(_) => {
+            return Err(Error::new_spanned(
+                input,
+                "db_table is not supported on enums — only structs can be database tables",
+            ))
+        }
+        _ => {
+            return Err(Error::new_spanned(
+                input,
+                "db_table is only supported on structs",
+            ))
+        }
+    };
+
+    Ok(DbSchemaInfo::new(
+        struct_name.to_string(),
+        table_name,
+        fields,
+        struct_attrs.db_indexes.clone(),
+        struct_attrs.db_foreign_keys.clone(),
+        struct_attrs.db_unique_constraints.clone(),
+    ))
+}
+
+/// Extract database field info from each struct field.
+///
+/// Parses `#[primary_key]`, `#[db_column]`, `#[db_default]`, `#[db_index]` attributes
+/// on each field and builds a `DbFieldInfo` for SQL column generation.
+fn extract_db_field_info(data_struct: &DataStruct) -> Result<Vec<DbFieldInfo>, Error> {
+    let mut db_fields = Vec::new();
+
+    for field in &data_struct.fields {
+        let field_name = field
+            .ident
+            .as_ref()
+            .ok_or_else(|| Error::new_spanned(field, "Unnamed fields not supported for db_table"))?
+            .to_string();
+
+        let rust_type = type_to_string(&field.ty)?;
+
+        // Parse field attributes for database metadata
+        let field_attrs = parse_field_attributes(&field.attrs)?;
+
+        let db_field = DbFieldInfo::new(
+            field_name,
+            rust_type,
+            field_attrs.primary_key,
+            field_attrs.db_column.as_ref(),
+            field_attrs.db_default.as_ref(),
+            field_attrs.db_index.as_ref(),
+        );
+
+        db_fields.push(db_field);
+    }
+
+    Ok(db_fields)
+}
+
 /// Convert a type to a string representation for hashing
 fn type_to_string(ty: &Type) -> Result<String, Error> {
     // For now, use the TokenStream representation
@@ -212,63 +322,8 @@ fn type_to_string(ty: &Type) -> Result<String, Error> {
     Ok(type_string)
 }
 
-/// Parse field attributes to extract attribute information
-fn parse_field_attributes(attrs: &[syn::Attribute]) -> Result<FieldAttributes, syn::Error> {
-    let mut result = FieldAttributes::default();
-
-    for attr in attrs {
-        if attr.path().is_ident("field") {
-            parse_field_config(attr, &mut result)?;
-        }
-    }
-
-    Ok(result)
-}
-
-/// Parse field config attribute
-fn parse_field_config(
-    attr: &syn::Attribute,
-    result: &mut FieldAttributes,
-) -> Result<(), syn::Error> {
-    use syn::{parse::ParseStream, Meta};
-
-    if let Meta::List(list) = &attr.meta {
-        list.parse_args_with(|input: ParseStream| -> syn::Result<()> {
-            while !input.is_empty() {
-                let key: Ident = input.parse()?;
-
-                if key == "skip" {
-                    result.skip = true;
-                    // Breaking attribute
-                    result.breaking_attributes.push("skip".to_string());
-                    if !input.is_empty() {
-                        input.parse::<syn::Token![,]>()?;
-                    }
-                } else {
-                    input.parse::<syn::Token![=]>()?;
-
-                    if key == "min" || key == "max" {
-                        // Validation attributes - not breaking
-                        if key == "min" {
-                            result.min = Some(input.parse()?);
-                        } else if key == "max" {
-                            result.max = Some(input.parse()?);
-                        }
-                    } else {
-                        return Err(syn::Error::new_spanned(&key, "Unknown field config key"));
-                    }
-                }
-
-                if !input.is_empty() {
-                    input.parse::<syn::Token![,]>()?;
-                }
-            }
-            Ok(())
-        })?;
-    }
-
-    Ok(())
-}
+// parse_field_attributes and parse_field_config are now imported from super::attributes
+// which handles all field-level attributes including Plan 082 db_* attributes
 
 /// Extract breaking attributes from field attributes
 fn extract_breaking_attributes(field_attrs: &FieldAttributes) -> Vec<String> {

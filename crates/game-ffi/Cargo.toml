@@ -19,7 +19,7 @@ proc-macro2 = "1.0"
 
 # Core dependencies
 blake3 = "1.8"
-uuid = { version = "1.20", features = ["v5", "serde"] }
+uuid = { version = "1.20", features = ["v5", "v7", "serde"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 
 # Internal proc-macro dependency
@@ -35,7 +35,7 @@ tokio = { workspace = true, features = ["test-util", "macros"] }
 rstest = "0.26"
 serial_test = "3.4"
 
-# For testing generated code
+
 serde = { workspace = true }
 serde_json = { workspace = true }
 

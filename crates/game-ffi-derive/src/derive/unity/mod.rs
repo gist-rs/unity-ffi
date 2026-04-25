@@ -33,11 +33,6 @@ pub fn generate_unity_bindings(
     // Generate C# field declarations
     let csharp_fields: Vec<String> = generate_csharp_fields(fields);
 
-    // Check if struct contains fixed arrays (requires unsafe struct)
-    let has_fixed_arrays = fields
-        .iter()
-        .any(|f| f.ty.starts_with("[") && f.ty.ends_with(']'));
-
     // Calculate total size from last field offset + size
     let total_size = calculate_total_size(fields);
 
@@ -57,13 +52,9 @@ pub fn generate_unity_bindings(
                 cs_code.push_str("    using System.Runtime.InteropServices;\n");
                 cs_code.push_str("\n");
 
-                // Struct declaration (unsafe if contains fixed arrays)
+                // Struct declaration
                 cs_code.push_str("    [StructLayout(LayoutKind.Sequential, Pack = 1)]\n");
-                cs_code.push_str("    public ");
-                if #has_fixed_arrays {
-                    cs_code.push_str("unsafe ");
-                }
-                cs_code.push_str("struct ");
+                cs_code.push_str("    public struct ");
                 cs_code.push_str(#unity_name);
                 cs_code.push_str("\n");
                 cs_code.push_str("    {\n");
@@ -132,14 +123,22 @@ fn generate_csharp_fields(fields: &[FieldInfo]) -> Vec<String> {
                 "public"
             };
 
-            // Handle fixed-size array types using C# unsafe fixed buffers
+            // Handle array types with MarshalAs attribute
             if field.ty.starts_with("[u8;") && field.ty.ends_with(']') {
                 // Extract array size (trim to handle whitespace like "[u8; 4]")
                 let inner = &field.ty[4..field.ty.len() - 1].trim();
                 if let Ok(size) = inner.parse::<usize>() {
+                    // Get C# type (use provided or map from type)
+                    let cs_type: String = field
+                        .csharp_type
+                        .clone()
+                        .or_else(|| map_rust_type_to_csharp(&field.ty))
+                        .unwrap_or_else(|| "byte[]".to_string());
+
                     return Some(format!(
-                        "        {} fixed byte {}[{}];\n",
-                        visibility, field.name, size
+                        "        [MarshalAs(UnmanagedType.ByValArray, SizeConst = {})]\n\
+                         {} {} {};\n",
+                        size, visibility, cs_type, field.name
                     ));
                 }
             }
@@ -229,7 +228,8 @@ mod tests {
         let result = generate_csharp_fields(&fields);
         assert!(result.len() == 2);
         assert!(result[0].contains("public float x;"));
-        assert!(result[1].contains("private fixed byte _padding[4]"));
+        assert!(result[1].contains("private byte[] _padding;"));
+        assert!(result[1].contains("MarshalAs"));
     }
 
     #[test]

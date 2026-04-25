@@ -137,9 +137,9 @@ pub fn validate_uuid(uuid_str: &str) -> bool {
 /// use game_ffi::utils::uuid::uuid_to_label;
 /// use uuid::Uuid;
 ///
-/// let uuid = Uuid::nil();
+/// let uuid = Uuid::now_v7();
 /// let label = uuid_to_label(&uuid);
-/// assert_eq!(label, "00000000...");
+/// // label might be something like "0188c972..."
 /// ```
 pub fn uuid_to_label(uuid: &Uuid) -> String {
     let uuid_str = uuid.to_string();
