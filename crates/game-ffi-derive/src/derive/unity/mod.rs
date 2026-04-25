@@ -229,8 +229,7 @@ mod tests {
         let result = generate_csharp_fields(&fields);
         assert!(result.len() == 2);
         assert!(result[0].contains("public float x;"));
-        assert!(result[1].contains("private byte[] _padding;"));
-        assert!(result[1].contains("MarshalAs"));
+        assert!(result[1].contains("private fixed byte _padding[4]"));
     }
 
     #[test]
