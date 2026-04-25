@@ -205,6 +205,8 @@ pub struct DbSchemaInfo {
     pub foreign_keys: Vec<DbForeignKeyAttr>,
     /// Unique constraints from `#[db_unique_constraint(...)]`
     pub unique_constraints: Vec<DbUniqueConstraintAttr>,
+    /// Skip CRUD generation (schema-only: TABLE_NAME, CREATE_TABLE_SQL, CREATE_INDEXES_SQL)
+    pub skip_crud: bool,
 }
 
 impl DbSchemaInfo {
@@ -216,6 +218,7 @@ impl DbSchemaInfo {
         table_indexes: Vec<DbIndexAttr>,
         foreign_keys: Vec<DbForeignKeyAttr>,
         unique_constraints: Vec<DbUniqueConstraintAttr>,
+        skip_crud: bool,
     ) -> Self {
         Self {
             struct_name,
@@ -224,6 +227,7 @@ impl DbSchemaInfo {
             table_indexes,
             foreign_keys,
             unique_constraints,
+            skip_crud,
         }
     }
 
@@ -426,6 +430,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            false,
         );
         assert_eq!(schema.snake_case_name(), "shop_inventory");
         assert_eq!(schema.upper_snake_name(), "SHOP_INVENTORY");

@@ -800,6 +800,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            false,
         )
     }
 
@@ -876,6 +877,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            false,
         )
     }
 
@@ -1120,6 +1122,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            false,
         );
         let struct_name = Ident::new("NoKey", Span::call_site());
         let tokens = generate_crud_impl(&struct_name, &schema);

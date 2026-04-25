@@ -266,6 +266,8 @@ fn build_db_schema_info(
         }
     };
 
+    let skip_crud = struct_attrs.skip_crud;
+
     Ok(DbSchemaInfo::new(
         struct_name.to_string(),
         table_name,
@@ -273,6 +275,7 @@ fn build_db_schema_info(
         struct_attrs.db_indexes.clone(),
         struct_attrs.db_foreign_keys.clone(),
         struct_attrs.db_unique_constraints.clone(),
+        skip_crud,
     ))
 }
 

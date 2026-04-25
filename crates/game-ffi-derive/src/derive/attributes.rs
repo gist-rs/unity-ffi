@@ -128,6 +128,8 @@ pub struct StructAttributes {
     pub skip_zero_copy: bool,
     /// Whether to skip FFI extern "C" function generation
     pub skip_ffi: bool,
+    /// Whether to skip CRUD generation (schema-only: TABLE_NAME, CREATE_TABLE_SQL, CREATE_INDEXES_SQL)
+    pub skip_crud: bool,
     // Plan 082: Database schema attributes
     /// Database table name from `#[db_table("name")]`
     pub db_table: Option<DbTableAttr>,
@@ -240,6 +242,8 @@ pub fn parse_struct_attributes(attrs: &[Attribute]) -> Result<StructAttributes, 
                             result.skip_zero_copy = true;
                         } else if ident == "skip_ffi" {
                             result.skip_ffi = true;
+                        } else if ident == "skip_crud" {
+                            result.skip_crud = true;
                         }
                         if !input.is_empty() {
                             input.parse::<syn::Token![,]>()?;

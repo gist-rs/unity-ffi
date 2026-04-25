@@ -155,7 +155,12 @@ pub fn generate_schema_impl(
     };
 
     // Plan 082 Phase 2: CRUD methods (from_row, insert, find_by_id, etc.)
-    let crud_impl = generate_crud_impl(struct_name, schema);
+    // Skip CRUD generation when #[db_table("name", skip_crud)] is used
+    let crud_impl = if schema.skip_crud {
+        quote! {}
+    } else {
+        generate_crud_impl(struct_name, schema)
+    };
 
     quote! {
         /// Auto-generated database schema implementation (Plan 082)
@@ -308,6 +313,7 @@ mod tests {
             }],
             vec![],
             vec![],
+            false,
         )
     }
 
@@ -379,6 +385,7 @@ mod tests {
                 name: "unique_shop_item".to_string(),
                 columns: vec!["shop_id".to_string(), "item_id".to_string()],
             }],
+            false,
         )
     }
 
@@ -429,6 +436,7 @@ mod tests {
             }],
             vec![],
             vec![],
+            false,
         );
         let sql = generate_create_indexes_sql(&schema);
 
@@ -453,6 +461,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            false,
         );
         let sql = generate_create_indexes_sql(&schema);
         assert!(sql.is_empty());
