@@ -19,79 +19,74 @@ Safe Rust FFI bridge for Unity, providing WebTransport networking with zero-copy
 
 **Unity is VIEW-ONLY** — no business logic, no state, no networking. Rust handles everything.
 
+> **Note:** `#[repr(C)]` is required on all structs that cross the FFI/network boundary.
+> `#[derive(GameComponent)]` does **NOT** auto-add `#[repr(C)]` — it only generates `impl` blocks and constants.
+> Without `#[repr(C)]`, Rust is free to reorder fields, breaking C#'s `[StructLayout(LayoutKind.Sequential, Pack = 1)]`.
+
+## Packet Types
+
+All packets use `#[repr(C)]` with `#[derive(GameComponent)]` for guaranteed memory layout matching between Rust and C#.
+
+| Packet | Purpose | Fields |
+|--------|---------|--------|
+| `PacketHeader` | Common header (2 bytes) | `packet_type: u8`, `magic: u8` (0xCC) |
+| `PlayerPos` | Player position update | `packet_type`, `magic`, `request_uuid: Uuid`, `pos: Position2D` |
+| `GameState` | Server state snapshot | `packet_type`, `magic`, `tick: u32`, `player_count: u32`, `reserved: [u8; 8]` |
+| `SpriteMessage` | Sprite CRUD operations | `packet_type`, `magic`, `operation: u8`, `sprite_type: u8`, `id: [u8; 16]`, `x: i16`, `y: i16` + padding |
+
+## Single Source of Truth — `Position2D`
+
+Position fields are defined **once** in `Position2D` and shared between the FFI packet and DB row via composition:
+
+```
+Position2D { player_id: u64, x: f32, y: f32 }
+    ├── PlayerPos             (FFI packet = header + request_uuid + Position2D)
+    └── PlayerPositionRecord  (DB row = id + #[db_flatten] Position2D + tick + created_at)
+```
+
+Adding `z`, `rotation`, `velocity` etc. to `Position2D` auto-propagates everywhere — wire format, DB schema, all consumers.
+
+| Struct | `#[db_table]` | Role | `#[repr(C)]` |
+|--------|---------------|------|---------------|
+| `Position2D` | `position_2d` | Shared position payload (single source of truth) | Yes — embedded in FFI structs |
+| `PlayerPos` | — | FFI network packet | Yes — crosses wire as raw bytes |
+| `PlayerPositionRecord` | `player_positions` | DB row with `#[db_flatten]` expanding `Position2D` columns | No — Rust-only, never crosses FFI |
+
 ## Auto Schema Flow
 
 The `schema_turso` example demonstrates recording player positions from network packets into a turso SQLite database using auto-generated DDL from `#[derive(GameComponent)]`.
 
 ```mermaid
-stateDiagram-v2
-    [*] --> InspectSchema : cargo run --example schema_turso
+sequenceDiagram
+    participant R as Rust
+    participant T as turso SQLite
 
-    InspectSchema --> CreateTable : Auto-generated constants
-    note right of InspectSchema
-        #[derive(GameComponent)]
-        #[db_table("player_positions")]
-        #[game_ffi(skip_crud)]
-        
-        Generates:
-        - TABLE_NAME
-        - CREATE_TABLE_SQL
-        - CREATE_INDEXES_SQL
-    end note
+    Note over R,T: ── Bootstrap (auto-generated DDL) ──
 
-    CreateTable --> ReadyDB : conn.execute(CREATE_TABLE_SQL)
-    note right of CreateTable
-        CREATE TABLE IF NOT EXISTS player_positions (
-            id BIGINT PRIMARY KEY,
-            player_id BIGINT NOT NULL,
-            x REAL NOT NULL,
-            y REAL NOT NULL,
-            tick BIGINT NOT NULL,
-            created_at BIGINT NOT NULL
-        )
-    end note
+    R->>T: conn.execute(PlayerPositionRecord::create_table_sql())
+    Note right of T: CREATE TABLE IF NOT EXISTS player_positions (<br/>  id BIGINT PRIMARY KEY,<br/>  player_id BIGINT NOT NULL, ← from Position2D<br/>  x REAL NOT NULL, ← from Position2D<br/>  y REAL NOT NULL, ← from Position2D<br/>  tick BIGINT NOT NULL,<br/>  created_at BIGINT NOT NULL<br/>)
+    T-->>R: ok
 
-    ReadyDB --> ReceivePacket : WebTransport / simulated
-    note right of ReadyDB
-        CREATE INDEX IF NOT EXISTS
-        idx_player_positions_player_id
-        ON player_positions(player_id)
-    end note
+    R->>T: conn.execute(PlayerPositionRecord::CREATE_INDEXES_SQL)
+    Note right of T: CREATE INDEX idx_player_positions_player_id<br/>ON player_positions(player_id)
+    T-->>R: ok
 
-    ReceivePacket --> ConvertToRecord : PlayerPos (FFI packet)
-    note right of ReceivePacket
-        PlayerPos {
-            request_uuid: Uuid,
-            player_id: u64,
-            x: f32, y: f32
-        }
-    end note
+    Note over R,T: ── Per-packet cycle ──
 
-    ConvertToRecord --> InsertRow : PlayerPositionRecord::from_player_pos()
-    note right of ConvertToRecord
-        PlayerPositionRecord {
-            id: 0, -- auto-assigned
-            player_id, x, y, tick,
-            created_at: now()
-        }
-    end note
+    loop for each PlayerPos packet
+        R->>R: PlayerPositionRecord::from_player_pos(&packet, tick)
+        R->>T: INSERT INTO player_positions<br/>(player_id, x, y, tick, created_at)<br/>VALUES (?1, ?2, ?3, ?4, ?5)
+        T-->>R: ok
+        R->>R: outbound_tx.send(GameState)
+    end
 
-    InsertRow --> ReceivePacket : More packets?
-    note right of InsertRow
-        INSERT INTO player_positions
-        (player_id, x, y, tick, created_at)
-        VALUES (?1, ?2, ?3, ?4, ?5)
-    end note
+    Note over R,T: ── Query phase (on demand) ──
 
-    InsertRow --> QueryAll : No more packets
+    R->>T: SELECT x, y, tick<br/>FROM player_positions<br/>WHERE player_id = ?1<br/>ORDER BY tick
+    T-->>R: Rows
+    R->>R: row.get_value(0) → x<br/>row.get_value(1) → y<br/>row.get_value(2) → tick
 
-    QueryAll --> QueryByPlayer : SELECT * ORDER BY id
-    QueryByPlayer --> [*] : WHERE player_id = ?1
-
-    state ReadyDB {
-        [*] --> MemoryDB : ":memory:"
-        MemoryDB --> DiskDB : "positions.db"
-    }
+    Note over T: Storage:<br/>":memory:" → ephemeral<br/>"positions.db" → disk
 ```
 
 ## Data Flow Sequence
@@ -107,7 +102,7 @@ sequenceDiagram
 
     Note over U,T: ── Bootstrap (auto-generated DDL) ──
 
-    R->>T: conn.execute(PlayerPositionRecord::CREATE_TABLE_SQL)
+    R->>T: conn.execute(PlayerPositionRecord::create_table_sql())
     T-->>R: ok
     R->>T: conn.execute(PlayerPositionRecord::CREATE_INDEXES_SQL)
     T-->>R: ok
@@ -115,7 +110,7 @@ sequenceDiagram
     Note over U,T: ── Per-packet cycle (repeats each tick) ──
 
     U->>FFI: network_send(&PlayerPos bytes)
-    Note right of U: PlayerPos {<br/>player_id: 1,<br/>x: 10.0, y: 20.0<br/>}
+    Note right of U: PlayerPos {<br/>packet_type: 1,<br/>magic: 0xCC,<br/>request_uuid: Uuid,<br/>pos: Position2D {<br/>  player_id: 1,<br/>  x: 10.0, y: 20.0<br/>}}
 
     FFI->>R: inbound_rx.recv() → Vec<u8>
     R->>R: PlayerPos::from_bytes(&bytes)
@@ -133,42 +128,10 @@ sequenceDiagram
     T-->>R: Rows
 
     loop rows.next() → Some(row)
-        R->>R: x = get_value(0), y = get_value(1), tick = get_value(2)
+        R->>R: x = row.get_value(0)<br/>y = row.get_value(1)<br/>tick = row.get_value(2)
     end
     Note right of R: Player 1 trail:<br/>tick 0: (10.0, 20.0)<br/>tick 2: (11.0, 21.0)<br/>tick 5: (12.0, 22.5)
-
-    Note over T: Persistence:<br/>":memory:" → ephemeral<br/>"positions.db" → disk
 ```
-
-## Packet Types
-
-All packets use `#[repr(C)]` with `#[derive(GameComponent)]` for guaranteed memory layout matching between Rust and C#.
-
-| Packet | Purpose | Fields |
-|--------|---------|--------|
-| `PacketHeader` | Common header | `packet_type`, `magic` (0xCC) |
-| `PlayerPos` | Player position update | `request_uuid`, `player_id`, `x`, `y` |
-| `GameState` | Server state snapshot | `tick`, `player_count`, `reserved` |
-| `SpriteMessage` | Sprite CRUD operations | `operation`, `sprite_type`, `id`, `x`, `y` |
-
-## Single Source of Truth — `Position2D`
-
-Position fields are defined **once** in `Position2D` and shared between the FFI packet and DB row via composition:
-
-```
-Position2D (player_id, x, y)
-    ├── PlayerPos          (FFI packet = header + Position2D)
-    └── PlayerPositionRecord (DB row = metadata + Position2D via #[db_flatten])
-```
-
-Adding `z`, `rotation`, `velocity` etc. to `Position2D` auto-propagates everywhere.
-
-| Struct | Table | Role |
-|--------|-------|------|
-| `Position2D` | `position_2d` | Shared position payload (single source of truth) |
-| `PlayerPositionRecord` | `player_positions` | DB row with `#[db_flatten]` expanding `Position2D` columns |
-
-All annotated with `#[db_table]` for auto DDL. Uses `#[game_ffi(skip_crud)]` since CRUD queries are written manually for turso (generated CRUD targets sqlx/PostgreSQL).
 
 ## Examples
 
@@ -188,6 +151,7 @@ All annotated with `#[db_table]` for auto DDL. Uses `#[game_ffi(skip_crud)]` sin
 use game_ffi::GameComponent;
 
 // 1. Shared payload — single source of truth for position data
+//    #[repr(C)] required because it's embedded in #[repr(C)] FFI structs
 #[repr(C)]
 #[derive(Debug, Clone, Copy, GameComponent)]
 #[game_ffi(skip_zero_copy, skip_ffi, skip_crud)]
@@ -198,7 +162,8 @@ pub struct Position2D {
     pub y: f32,
 }
 
-// 2. FFI packet = header + shared payload
+// 2. FFI packet = header + request_uuid + shared payload
+//    #[repr(C)] required — this crosses the network as raw bytes
 #[repr(C)]
 #[derive(GameComponent, Debug, Clone, Copy)]
 pub struct PlayerPos {
@@ -209,6 +174,7 @@ pub struct PlayerPos {
 }
 
 // 3. DB record = metadata + flattened shared payload
+//    No #[repr(C)] needed — Rust-only, never crosses FFI boundary
 #[derive(Debug, Clone, GameComponent)]
 #[game_ffi(skip_zero_copy, skip_ffi, skip_crud)]
 #[db_table("player_positions")]
@@ -268,7 +234,7 @@ while let Some(row) = rows.next().await? {
 | `#[game_ffi(skip_crud)]` | Skip sqlx CRUD generation (use with turso) |
 | `#[game_ffi(skip_zero_copy)]` | Skip `as_bytes()`/`from_bytes()` generation |
 | `#[game_ffi(skip_ffi)]` | Skip `extern "C"` FFI function generation |
-| `#[hash = "all"`] | Strict UUID mode (all attributes) |
+| `#[hash = "all"]` | Strict UUID mode (all attributes) |
 | `#[hash = "name"]` | Loose UUID mode (name only) |
 
 ### Field-level
@@ -289,7 +255,19 @@ while let Some(row) = rows.next().await? {
 | `COLUMN_DEFS_SQL` | All columns | Own columns only (excludes flattened) |
 | `column_names()` | All fields | Own fields only (excludes flattened) |
 | Flattened type requirement | N/A | Must have `#[db_table]` (for `COLUMN_DEFS_SQL`) |
-| Adding fields to shared type | N/A | Auto-propagates to all users |
+| Adding fields to shared type | N/A | Auto-propagates to all consumers |
+
+### `#[repr(C)]` — when do you need it?
+
+| Scenario | `#[repr(C)]` needed? | Why |
+|----------|---------------------|-----|
+| FFI network packet (e.g. `PlayerPos`) | **Yes** | Crosses wire as raw bytes, C# reads same layout |
+| Embedded in FFI struct (e.g. `Position2D`) | **Yes** | Nested `#[repr(C)]` guarantees flat memory layout |
+| DB-only record (e.g. `PlayerPositionRecord`) | **No** | Rust-only, never crosses FFI boundary |
+| Pure ECS component | **No** | Rust-only game state |
+| Enums sent over wire (e.g. `PacketType`) | **Yes** | Discriminant values must match C# |
+
+`#[derive(GameComponent)]` does **NOT** auto-add `#[repr(C)]`. It only generates `impl` blocks. You must add `#[repr(C)]` yourself on any struct that crosses the FFI/network boundary.
 
 ## Feature Flags
 
