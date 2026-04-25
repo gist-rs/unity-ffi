@@ -305,6 +305,7 @@ fn extract_db_field_info(data_struct: &DataStruct) -> Result<Vec<DbFieldInfo>, E
             field_attrs.db_column.as_ref(),
             field_attrs.db_default.as_ref(),
             field_attrs.db_index.as_ref(),
+            field_attrs.db_flatten,
         );
 
         db_fields.push(db_field);

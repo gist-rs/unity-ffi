@@ -3,7 +3,13 @@
 //! Generates:
 //! - `CREATE TABLE IF NOT EXISTS` statements with columns, foreign keys, and unique constraints
 //! - `CREATE INDEX IF NOT EXISTS` statements from `#[db_index]` attributes
-//! - Rust `const` strings for embeddable SQL constants via `quote`
+//! - `COLUMN_DEFS_SQL` — column definitions without CREATE TABLE wrapper (for `#[db_flatten]` composition)
+//! - Rust `const` strings and `fn` for embeddable SQL via `quote`
+//!
+//! When `#[db_flatten]` is used on a field:
+//! - `CREATE_TABLE_SQL` becomes `fn create_table_sql() -> String` (runtime composition)
+//! - `COLUMN_DEFS_SQL` const contains only own non-flattened column definitions
+//! - The flattened type must also have `#[db_table]` (so it has `COLUMN_DEFS_SQL`)
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -16,7 +22,34 @@ use crate::derive::attributes::{DbForeignKeyAttr, DbIndexColumns};
 // SQL DDL Generation
 // ============================================================================
 
+/// Get column SQL lines for non-flattened fields (no indentation, no commas).
+fn own_column_sql_lines(schema: &DbSchemaInfo) -> Vec<String> {
+    schema
+        .fields
+        .iter()
+        .filter(|f| !f.is_flatten())
+        .filter_map(|f| f.column_sql())
+        .collect()
+}
+
+/// Generate column definitions SQL string (no indentation, no commas, no CREATE TABLE wrapper).
+///
+/// Each line is a single column definition. Flattened fields are excluded.
+///
+/// Example output:
+/// ```text
+/// id UUID PRIMARY KEY DEFAULT gen_random_uuid()
+/// name VARCHAR(255) NOT NULL
+/// is_enabled BOOLEAN NOT NULL DEFAULT true
+/// ```
+pub fn generate_column_defs_sql(schema: &DbSchemaInfo) -> String {
+    own_column_sql_lines(schema).join("\n")
+}
+
 /// Generate a `CREATE TABLE IF NOT EXISTS` SQL statement from a `DbSchemaInfo`.
+///
+/// Only includes non-flattened fields. For structs with `#[db_flatten]`,
+/// use the generated `create_table_sql()` function instead.
 ///
 /// Output example:
 /// ```sql
@@ -24,21 +57,14 @@ use crate::derive::attributes::{DbForeignKeyAttr, DbIndexColumns};
 ///     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 ///     name VARCHAR(255) NOT NULL,
 ///     shop_type VARCHAR(50) NOT NULL DEFAULT 'general',
-///     npc_id UUID REFERENCES npcs(id) ON DELETE SET NULL,
-///     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-///     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-///     CONSTRAINT unique_shop_name UNIQUE (name)
+///     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 /// )
 /// ```
 pub fn generate_create_table_sql(schema: &DbSchemaInfo) -> String {
-    let mut lines: Vec<String> = Vec::new();
-
-    // Column definitions
-    for field in &schema.fields {
-        if let Some(col_sql) = field.column_sql() {
-            lines.push(format!("    {}", col_sql));
-        }
-    }
+    let mut lines: Vec<String> = own_column_sql_lines(schema)
+        .into_iter()
+        .map(|l| format!("    {}", l))
+        .collect();
 
     // Foreign key constraints
     for fk in &schema.foreign_keys {
@@ -61,13 +87,6 @@ pub fn generate_create_table_sql(schema: &DbSchemaInfo) -> String {
 /// Generate all `CREATE INDEX IF NOT EXISTS` statements from a `DbSchemaInfo`.
 ///
 /// Combines table-level and field-level indexes.
-///
-/// Output example:
-/// ```sql
-/// CREATE INDEX IF NOT EXISTS idx_shops_npc_id ON shops(npc_id);
-/// CREATE INDEX IF NOT EXISTS idx_shop_inventory_category ON shop_inventory(shop_id, category);
-/// CREATE INDEX IF NOT EXISTS idx_active ON shops(is_enabled) WHERE is_enabled = true;
-/// ```
 pub fn generate_create_indexes_sql(schema: &DbSchemaInfo) -> String {
     let indexes = schema.all_indexes();
     if indexes.is_empty() {
@@ -104,14 +123,88 @@ pub fn generate_full_schema_sql(schema: &DbSchemaInfo) -> String {
 // Rust Code Generation (quote)
 // ============================================================================
 
+/// Generate token streams for column pushes in struct field order.
+///
+/// Own fields get a direct `lines.push(...)`, flattened fields get a loop
+/// that reads `<Type>::COLUMN_DEFS_SQL`.
+fn generate_column_push_tokens(schema: &DbSchemaInfo) -> Vec<TokenStream> {
+    let mut pushes = Vec::new();
+
+    for field in &schema.fields {
+        if field.is_flatten() {
+            // Push lines from flattened type's COLUMN_DEFS_SQL
+            match syn::parse_str::<syn::Path>(&field.rust_type) {
+                Ok(type_path) => {
+                    pushes.push(quote! {
+                        for line in #type_path::COLUMN_DEFS_SQL.lines() {
+                            let trimmed = line.trim();
+                            if !trimmed.is_empty() {
+                                lines.push(trimmed.to_string());
+                            }
+                        }
+                    });
+                }
+                Err(_) => {
+                    let msg = format!(
+                        "db_flatten: cannot parse type '{}' as a valid path",
+                        field.rust_type
+                    );
+                    pushes.push(quote! { compile_error!(#msg); });
+                }
+            }
+        } else if let Some(col_sql) = field.column_sql() {
+            pushes.push(quote! {
+                lines.push(#col_sql.to_string());
+            });
+        }
+        // Fields with no SQL mapping (e.g., unsupported types) are silently skipped
+    }
+
+    pushes
+}
+
+/// Generate token streams for foreign key constraint pushes.
+fn generate_fk_push_tokens(schema: &DbSchemaInfo) -> Vec<TokenStream> {
+    schema
+        .foreign_keys
+        .iter()
+        .map(|fk| {
+            let fk_sql = foreign_key_sql(fk);
+            quote! {
+                lines.push(#fk_sql.to_string());
+            }
+        })
+        .collect()
+}
+
+/// Generate token streams for unique constraint pushes.
+fn generate_unique_push_tokens(schema: &DbSchemaInfo) -> Vec<TokenStream> {
+    schema
+        .unique_constraints
+        .iter()
+        .map(|uc| {
+            let cols = uc.columns.join(", ");
+            let sql = format!("CONSTRAINT {} UNIQUE ({})", uc.name, cols);
+            quote! {
+                lines.push(#sql.to_string());
+            }
+        })
+        .collect()
+}
+
 /// Generate Rust `impl` block with SQL constants and helper methods.
 ///
-/// Generates:
-/// - `CREATE_TABLE_SQL` const
-/// - `CREATE_INDEXES_SQL` const (if indexes exist)
-/// - `TABLE_NAME` const
-/// - `primary_key_field()` method
-/// - `column_names()` method
+/// For structs **without** `#[db_flatten]`:
+/// - `CREATE_TABLE_SQL: &'static str` (const) — full CREATE TABLE statement
+/// - `COLUMN_DEFS_SQL: &'static str` (const) — column definitions only
+///
+/// For structs **with** `#[db_flatten]`:
+/// - `create_table_sql() -> String` (fn) — runtime composition with flattened types
+/// - `COLUMN_DEFS_SQL: &'static str` (const) — own columns only (no flattened)
+///
+/// Always generates:
+/// - `TABLE_NAME`, `CREATE_INDEXES_SQL` (const)
+/// - `column_names()`, `column_count()`, `primary_key_field()` methods
 pub fn generate_schema_impl(
     struct_name: &proc_macro2::Ident,
     schema: &DbSchemaInfo,
@@ -119,20 +212,29 @@ pub fn generate_schema_impl(
     let table_name = &schema.table_name;
     let create_table_sql = generate_create_table_sql(schema);
     let create_indexes_sql = generate_create_indexes_sql(schema);
+    let column_defs_sql = generate_column_defs_sql(schema);
 
-    // Column name constants
-    let column_names: Vec<String> = schema.fields.iter().map(|f| f.name.clone()).collect();
+    // Column names (own non-flattened fields only)
+    let column_names: Vec<String> = schema
+        .fields
+        .iter()
+        .filter(|f| !f.is_flatten())
+        .map(|f| f.name.clone())
+        .collect();
     let column_count = column_names.len();
 
     // Primary key field name
     let pk_field = schema.primary_key().map(|f| f.name.clone());
 
-    // Generate index SQL const only if indexes exist
+    // Check if any field uses #[db_flatten]
+    let has_flatten = schema.fields.iter().any(|f| f.is_flatten());
+
+    // Index SQL const (generated regardless of flatten)
     let index_sql_tokens = if create_indexes_sql.is_empty() {
         quote! {}
     } else {
         quote! {
-            /// Auto-generated CREATE INDEX SQL (Plan 082)
+            /// Auto-generated CREATE INDEX SQL
             pub const CREATE_INDEXES_SQL: &'static str = #create_indexes_sql;
         }
     };
@@ -154,8 +256,45 @@ pub fn generate_schema_impl(
         }
     };
 
-    // Plan 082 Phase 2: CRUD methods (from_row, insert, find_by_id, etc.)
-    // Skip CRUD generation when #[db_table("name", skip_crud)] is used
+    // CREATE TABLE: const for non-flatten, fn for flatten
+    let create_table_tokens = if has_flatten {
+        let column_pushes = generate_column_push_tokens(schema);
+        let fk_pushes = generate_fk_push_tokens(schema);
+        let unique_pushes = generate_unique_push_tokens(schema);
+
+        quote! {
+            /// Auto-generated CREATE TABLE SQL (runtime composition with flattened types).
+            ///
+            /// This is a function instead of a const because flattened columns come from
+            /// other types' `COLUMN_DEFS_SQL` constants, which can't be concatenated at
+            /// compile time.
+            pub fn create_table_sql() -> String {
+                let mut lines: Vec<String> = Vec::new();
+                #(#column_pushes)*
+                #(#fk_pushes)*
+                #(#unique_pushes)*
+                format!(
+                    "CREATE TABLE IF NOT EXISTS {} (\n    {}\n)",
+                    Self::TABLE_NAME,
+                    lines.join(",\n    "),
+                )
+            }
+        }
+    } else {
+        quote! {
+            /// Auto-generated CREATE TABLE SQL
+            pub const CREATE_TABLE_SQL: &'static str = #create_table_sql;
+        }
+    };
+
+    // Column defs doc comment varies based on flatten
+    let column_defs_doc = if has_flatten {
+        "Column definitions SQL (own non-flattened columns only, one per line).\n\nUsed by parent structs with `#[db_flatten]` to compose full CREATE TABLE SQL."
+    } else {
+        "Column definitions SQL (one per line, no CREATE TABLE wrapper).\n\nUseful for composing into parent tables via `#[db_flatten]`."
+    };
+
+    // Plan 082 Phase 2: CRUD methods
     let crud_impl = if schema.skip_crud {
         quote! {}
     } else {
@@ -163,22 +302,24 @@ pub fn generate_schema_impl(
     };
 
     quote! {
-        /// Auto-generated database schema implementation (Plan 082)
+        /// Auto-generated database schema implementation
         impl #struct_name {
             /// Database table name
             pub const TABLE_NAME: &'static str = #table_name;
 
-            /// Auto-generated CREATE TABLE SQL (Plan 082)
-            pub const CREATE_TABLE_SQL: &'static str = #create_table_sql;
+            #create_table_tokens
+
+            #[doc = #column_defs_doc]
+            pub const COLUMN_DEFS_SQL: &'static str = #column_defs_sql;
 
             #index_sql_tokens
 
-            /// Get all column names in struct field order
+            /// Get column names (own non-flattened fields only)
             pub fn column_names() -> &'static [&'static str] {
                 &[#(#column_names),*]
             }
 
-            /// Get the number of columns
+            /// Get the number of own non-flattened columns
             pub fn column_count() -> usize {
                 #column_count
             }
@@ -221,7 +362,7 @@ fn index_sql(
 
 /// Format a foreign key constraint SQL fragment for a CREATE TABLE column or table constraint.
 ///
-/// Output: `FOREIGN KEY (column) REFERENCES table(col) ON DELETE action`
+/// Output: `FOREIGN KEY (column) REFERENCES table.col) ON DELETE action`
 fn foreign_key_sql(fk: &DbForeignKeyAttr) -> String {
     let mut sql = format!("FOREIGN KEY ({}) REFERENCES {}", fk.column, fk.references);
 
@@ -277,6 +418,7 @@ mod tests {
                     constraints: vec![],
                     default_value: Some(DbDefaultAttr::String("gen_random_uuid()".to_string())),
                     index: None,
+                    flatten: false,
                 },
                 DbFieldInfo {
                     name: "name".to_string(),
@@ -286,6 +428,7 @@ mod tests {
                     constraints: vec!["NOT NULL".to_string()],
                     default_value: None,
                     index: None,
+                    flatten: false,
                 },
                 DbFieldInfo {
                     name: "is_enabled".to_string(),
@@ -295,6 +438,7 @@ mod tests {
                     constraints: vec![],
                     default_value: Some(DbDefaultAttr::Bool(true)),
                     index: None,
+                    flatten: false,
                 },
                 DbFieldInfo {
                     name: "created_at".to_string(),
@@ -304,6 +448,7 @@ mod tests {
                     constraints: vec![],
                     default_value: Some(DbDefaultAttr::String("NOW()".to_string())),
                     index: None,
+                    flatten: false,
                 },
             ],
             vec![DbIndexAttr {
@@ -330,6 +475,7 @@ mod tests {
                     constraints: vec![],
                     default_value: Some(DbDefaultAttr::String("gen_random_uuid()".to_string())),
                     index: None,
+                    flatten: false,
                 },
                 DbFieldInfo {
                     name: "shop_id".to_string(),
@@ -339,6 +485,7 @@ mod tests {
                     constraints: vec![],
                     default_value: None,
                     index: None,
+                    flatten: false,
                 },
                 DbFieldInfo {
                     name: "item_id".to_string(),
@@ -348,6 +495,7 @@ mod tests {
                     constraints: vec![],
                     default_value: None,
                     index: None,
+                    flatten: false,
                 },
                 DbFieldInfo {
                     name: "price".to_string(),
@@ -357,6 +505,7 @@ mod tests {
                     constraints: vec![],
                     default_value: None,
                     index: None,
+                    flatten: false,
                 },
                 DbFieldInfo {
                     name: "stock_quantity".to_string(),
@@ -366,6 +515,7 @@ mod tests {
                     constraints: vec![],
                     default_value: Some(DbDefaultAttr::Number(2147483647)),
                     index: None,
+                    flatten: false,
                 },
             ],
             vec![],
@@ -388,6 +538,8 @@ mod tests {
             false,
         )
     }
+
+    // ── Existing tests (updated with flatten: false) ──────────────────
 
     #[test]
     fn test_generate_simple_create_table() {
@@ -457,6 +609,7 @@ mod tests {
                 constraints: vec![],
                 default_value: None,
                 index: None,
+                flatten: false,
             }],
             vec![],
             vec![],
@@ -533,12 +686,238 @@ mod tests {
         let struct_name = proc_macro2::Ident::new("Shop", proc_macro2::Span::call_site());
         let tokens = generate_schema_impl(&struct_name, &schema);
 
-        // Verify the generated token stream contains expected items
         let token_str = tokens.to_string();
         assert!(token_str.contains("TABLE_NAME"));
         assert!(token_str.contains("CREATE_TABLE_SQL"));
+        assert!(token_str.contains("COLUMN_DEFS_SQL"));
         assert!(token_str.contains("CREATE_INDEXES_SQL"));
         assert!(token_str.contains("column_names"));
         assert!(token_str.contains("primary_key_field"));
+    }
+
+    // ── COLUMN_DEFS_SQL tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_column_defs_sql_simple() {
+        let schema = make_simple_schema();
+        let sql = generate_column_defs_sql(&schema);
+
+        // Each column on its own line, no commas, no CREATE TABLE wrapper
+        assert!(sql.contains("id UUID PRIMARY KEY DEFAULT gen_random_uuid()"));
+        assert!(sql.contains("name VARCHAR(255) NOT NULL"));
+        assert!(sql.contains("is_enabled BOOLEAN NOT NULL DEFAULT true"));
+        assert!(sql.contains("created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"));
+
+        // No commas in column defs SQL
+        assert!(!sql.contains(","));
+        // No CREATE TABLE wrapper
+        assert!(!sql.contains("CREATE TABLE"));
+    }
+
+    #[test]
+    fn test_column_defs_sql_with_fk_and_unique() {
+        let schema = make_complex_schema();
+        let sql = generate_column_defs_sql(&schema);
+
+        // FK and unique constraints are NOT in column_defs_sql
+        assert!(!sql.contains("FOREIGN KEY"));
+        assert!(!sql.contains("CONSTRAINT"));
+        assert!(!sql.contains("UNIQUE"));
+
+        // But columns are present
+        assert!(sql.contains("id UUID PRIMARY KEY"));
+        assert!(sql.contains("price BIGINT"));
+    }
+
+    // ── #[db_flatten] tests ───────────────────────────────────────────
+
+    fn make_flatten_schema() -> DbSchemaInfo {
+        DbSchemaInfo::new(
+            "PlayerPositionRecord".to_string(),
+            "player_positions".to_string(),
+            vec![
+                DbFieldInfo {
+                    name: "id".to_string(),
+                    rust_type: "i64".to_string(),
+                    primary_key: true,
+                    sql_type_override: None,
+                    constraints: vec![],
+                    default_value: None,
+                    index: None,
+                    flatten: false,
+                },
+                DbFieldInfo {
+                    name: "pos".to_string(),
+                    rust_type: "Position2D".to_string(),
+                    primary_key: false,
+                    sql_type_override: None,
+                    constraints: vec![],
+                    default_value: None,
+                    index: None,
+                    flatten: true,
+                },
+                DbFieldInfo {
+                    name: "tick".to_string(),
+                    rust_type: "u32".to_string(),
+                    primary_key: false,
+                    sql_type_override: None,
+                    constraints: vec![],
+                    default_value: None,
+                    index: None,
+                    flatten: false,
+                },
+                DbFieldInfo {
+                    name: "created_at".to_string(),
+                    rust_type: "i64".to_string(),
+                    primary_key: false,
+                    sql_type_override: None,
+                    constraints: vec![],
+                    default_value: None,
+                    index: None,
+                    flatten: false,
+                },
+            ],
+            vec![],
+            vec![],
+            vec![],
+            true,
+        )
+    }
+
+    #[test]
+    fn test_flatten_skips_field_from_own_columns() {
+        let schema = make_flatten_schema();
+        let sql = generate_column_defs_sql(&schema);
+
+        // Own columns are present
+        assert!(sql.contains("id BIGINT PRIMARY KEY"));
+        assert!(sql.contains("tick BIGINT NOT NULL"));
+        assert!(sql.contains("created_at BIGINT NOT NULL"));
+
+        // Flattened field is NOT in own columns
+        assert!(!sql.contains("pos"));
+        assert!(!sql.contains("Position2D"));
+    }
+
+    #[test]
+    fn test_flatten_column_names_excludes_flattened() {
+        let schema = make_flatten_schema();
+        let names: Vec<&str> = schema
+            .fields
+            .iter()
+            .filter(|f| !f.is_flatten())
+            .map(|f| f.name.as_str())
+            .collect();
+
+        assert_eq!(names, vec!["id", "tick", "created_at"]);
+    }
+
+    #[test]
+    fn test_flatten_generates_fn_not_const() {
+        let schema = make_flatten_schema();
+        let struct_name =
+            proc_macro2::Ident::new("PlayerPositionRecord", proc_macro2::Span::call_site());
+        let tokens = generate_schema_impl(&struct_name, &schema);
+        let token_str = tokens.to_string();
+
+        // Should have fn create_table_sql, not const CREATE_TABLE_SQL
+        assert!(token_str.contains("create_table_sql"));
+        assert!(
+            !token_str.contains("CREATE_TABLE_SQL"),
+            "flatten structs should use fn create_table_sql(), not const CREATE_TABLE_SQL"
+        );
+
+        // Should reference the flattened type's COLUMN_DEFS_SQL
+        assert!(
+            token_str.contains("COLUMN_DEFS_SQL"),
+            "should reference flattened type's COLUMN_DEFS_SQL"
+        );
+
+        // Should still have TABLE_NAME and COLUMN_DEFS_SQL as const
+        assert!(token_str.contains("TABLE_NAME"));
+    }
+
+    #[test]
+    fn test_flatten_create_table_sql_has_own_columns() {
+        let schema = make_flatten_schema();
+        let sql = generate_create_table_sql(&schema);
+
+        // generate_create_table_sql only has own columns (no flattened)
+        assert!(sql.contains("id BIGINT PRIMARY KEY"));
+        assert!(sql.contains("tick BIGINT NOT NULL"));
+        assert!(sql.contains("created_at BIGINT NOT NULL"));
+        assert!(sql.starts_with("CREATE TABLE IF NOT EXISTS player_positions"));
+    }
+
+    #[test]
+    fn test_non_flatten_generates_const() {
+        let schema = make_simple_schema();
+        let struct_name = proc_macro2::Ident::new("Shop", proc_macro2::Span::call_site());
+        let tokens = generate_schema_impl(&struct_name, &schema);
+        let token_str = tokens.to_string();
+
+        // Should have const CREATE_TABLE_SQL
+        assert!(token_str.contains("CREATE_TABLE_SQL"));
+        // Should NOT have fn create_table_sql
+        assert!(!token_str.contains("fn create_table_sql"));
+    }
+
+    #[test]
+    fn test_generate_column_push_tokens_own_field() {
+        let schema = DbSchemaInfo::new(
+            "Simple".to_string(),
+            "simple".to_string(),
+            vec![DbFieldInfo {
+                name: "id".to_string(),
+                rust_type: "i64".to_string(),
+                primary_key: true,
+                sql_type_override: None,
+                constraints: vec![],
+                default_value: None,
+                index: None,
+                flatten: false,
+            }],
+            vec![],
+            vec![],
+            vec![],
+            false,
+        );
+
+        let pushes = generate_column_push_tokens(&schema);
+        assert_eq!(pushes.len(), 1);
+
+        let token_str = pushes[0].to_string();
+        assert!(token_str.contains("id BIGINT PRIMARY KEY"));
+        // quote! renders method calls with spaces: `lines . push (...)`
+        assert!(token_str.contains("push"));
+    }
+
+    #[test]
+    fn test_generate_column_push_tokens_flatten_field() {
+        let schema = DbSchemaInfo::new(
+            "WithFlatten".to_string(),
+            "with_flatten".to_string(),
+            vec![DbFieldInfo {
+                name: "data".to_string(),
+                rust_type: "MyData".to_string(),
+                primary_key: false,
+                sql_type_override: None,
+                constraints: vec![],
+                default_value: None,
+                index: None,
+                flatten: true,
+            }],
+            vec![],
+            vec![],
+            vec![],
+            false,
+        );
+
+        let pushes = generate_column_push_tokens(&schema);
+        assert_eq!(pushes.len(), 1);
+
+        let token_str = pushes[0].to_string();
+        assert!(token_str.contains("MyData :: COLUMN_DEFS_SQL"));
+        assert!(token_str.contains("lines"));
     }
 }

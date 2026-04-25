@@ -99,6 +99,8 @@ pub struct DbFieldInfo {
     pub default_value: Option<DbDefaultAttr>,
     /// Field-level index from `#[db_index(...)]`
     pub index: Option<DbIndexAttr>,
+    /// Whether this field's type columns should be flattened into the parent table
+    pub flatten: bool,
 }
 
 impl DbFieldInfo {
@@ -110,6 +112,7 @@ impl DbFieldInfo {
         db_column: Option<&DbColumnAttr>,
         db_default: Option<&DbDefaultAttr>,
         db_index: Option<&DbIndexAttr>,
+        flatten: bool,
     ) -> Self {
         let (sql_type_override, constraints) = match db_column {
             Some(col) => (col.sql_type.clone(), col.constraints.clone()),
@@ -124,6 +127,7 @@ impl DbFieldInfo {
             constraints,
             default_value: db_default.cloned(),
             index: db_index.cloned(),
+            flatten,
         }
     }
 
@@ -152,6 +156,12 @@ impl DbFieldInfo {
             DbDefaultAttr::Float(f) => format!("DEFAULT {}", f),
             DbDefaultAttr::Bool(b) => format!("DEFAULT {}", b),
         })
+    }
+
+    /// Whether this field should be skipped from direct column SQL generation
+    /// (flattened fields are expanded from their embedded type's columns).
+    pub fn is_flatten(&self) -> bool {
+        self.flatten
     }
 
     /// Build the full column definition SQL fragment for a CREATE TABLE statement.
@@ -347,6 +357,7 @@ mod tests {
             constraints: vec![],
             default_value: Some(DbDefaultAttr::String("gen_random_uuid()".to_string())),
             index: None,
+            flatten: false,
         };
         assert_eq!(
             field.column_sql(),
@@ -364,6 +375,7 @@ mod tests {
             constraints: vec![],
             default_value: None,
             index: None,
+            flatten: false,
         };
         assert!(field.is_nullable());
         // Nullable fields should NOT get NOT NULL
@@ -380,6 +392,7 @@ mod tests {
             constraints: vec!["NOT NULL".to_string()],
             default_value: None,
             index: None,
+            flatten: false,
         };
         assert_eq!(
             field.column_sql(),
@@ -397,6 +410,7 @@ mod tests {
             constraints: vec![],
             default_value: Some(DbDefaultAttr::Number(24)),
             index: None,
+            flatten: false,
         };
         assert_eq!(
             field.column_sql(),
@@ -414,6 +428,7 @@ mod tests {
             constraints: vec![],
             default_value: Some(DbDefaultAttr::Bool(true)),
             index: None,
+            flatten: false,
         };
         assert_eq!(
             field.column_sql(),

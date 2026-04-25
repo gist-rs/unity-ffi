@@ -13,6 +13,7 @@
 //! - `db_foreign_key` - Foreign key constraint (Plan 082)
 //! - `db_unique_constraint` - Unique constraint (Plan 082)
 //! - `primary_key` - Primary key field marker (Plan 082)
+//! - `db_flatten` - Flatten embedded struct columns into parent table (Plan 001)
 
 // Internal module for macro implementation
 mod derive;
@@ -33,7 +34,8 @@ mod derive;
         db_index,
         db_foreign_key,
         db_unique_constraint,
-        primary_key
+        primary_key,
+        db_flatten
     )
 )]
 pub fn game_component_macro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {

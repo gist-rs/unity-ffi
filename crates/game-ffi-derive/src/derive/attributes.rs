@@ -185,6 +185,8 @@ pub struct FieldAttributes {
     pub db_default: Option<DbDefaultAttr>,
     /// Field-level index definition
     pub db_index: Option<DbIndexAttr>,
+    /// Whether this field's type columns should be flattened into the parent table
+    pub db_flatten: bool,
 }
 
 /// Unity-specific configuration for a field
@@ -427,6 +429,9 @@ pub fn parse_field_attributes(attrs: &[Attribute]) -> Result<FieldAttributes, sy
         } else if attr.path().is_ident("db_index") {
             // #[db_index(name = "...", on = "...")] — Plan 082
             result.db_index = Some(parse_db_index_attr(attr)?);
+        } else if attr.path().is_ident("db_flatten") {
+            // #[db_flatten] — flatten embedded struct columns into parent table
+            result.db_flatten = true;
         }
     }
 
