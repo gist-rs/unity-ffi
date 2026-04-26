@@ -1,6 +1,6 @@
 //! Tests for GameComponent derive macro with UUID v7 and hash modes
 
-use game_ffi::GameComponent;
+use game_ffi::{unity, unreal, GameComponent};
 
 // ============================================================================
 // Default Mode (field signature hashing) - Recommended for most cases
@@ -73,8 +73,6 @@ pub struct EntityUpdate {
     pub _padding: u16,
 }
 
-#[repr(C)]
-#[derive(GameComponent)]
 #[unity(name = "PlayerPosUnity")]
 pub struct PlayerPos {
     pub header: PacketHeader,
@@ -83,8 +81,6 @@ pub struct PlayerPos {
     pub y: f32,
 }
 
-#[repr(C)]
-#[derive(GameComponent)]
 #[unreal(class = "FCharacterUpdate", blueprint_type)]
 pub struct CharacterUpdate {
     pub char_id: u64,

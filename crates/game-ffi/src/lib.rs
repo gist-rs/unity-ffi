@@ -161,6 +161,7 @@
 //! ```rust
 //! use game_ffi::GameComponent;
 //!
+//! #[repr(C)]
 //! #[derive(GameComponent)]
 //! pub struct PlayerPosition {
 //!     pub x: f32,
@@ -237,6 +238,9 @@
 
 // Re-export the main derive macro
 pub use game_ffi_derive::GameComponent;
+
+// Re-export attribute macros that auto-inject #[repr(C)] + #[derive(GameComponent)]
+pub use game_ffi_derive::{unity, unreal};
 
 // Public utilities
 pub mod utils;

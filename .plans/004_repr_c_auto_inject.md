@@ -116,44 +116,41 @@ The derive macro continues to parse both `#[unity]` (helper) and `#[__game_ffi_u
 
 ### Phase 1: `#[unity]` attribute macro
 
-- [ ] **T1: Add `#[unity]` attribute macro in `lib.rs`**
-  - Add `#[proc_macro_attribute]` for `unity`
-  - Parse attribute args (`name = "..."`, `read_only`)
-  - Parse input struct
-  - Inject `#[repr(C)]`, `#[derive(GameComponent)]`, `#[__game_ffi_unity(...)]`
-  - Return modified struct
+- [x] **T1: Add `#[unity]` attribute macro in `lib.rs`** ✅
+  - Added `#[proc_macro_attribute]` for `unity` in `game-ffi-derive/src/lib.rs`
+  - Implemented `expand_engine_attribute()` in `game_component.rs` — parses args, injects `#[repr(C)]`, `#[derive(GameComponent)]`, `#[__game_ffi_unity(...)]`
+  - Re-parses combined token stream so syn normalises attributes
 
-- [ ] **T2: Register `__game_ffi_unity` as derive helper**
-  - Add `__game_ffi_unity` to `#[proc_macro_derive(GameComponent, attributes(...))]`
-  - Derive macro parses `#[__game_ffi_unity]` same as current `#[unity]` parsing
+- [x] **T2: Register `__game_ffi_unity` as derive helper** ✅
+  - Added `__game_ffi_unity` to `#[proc_macro_derive(GameComponent, attributes(...))]`
 
-- [ ] **T3: Update derive attribute parsing**
-  - `parse_struct_attributes`: also check for `#[__game_ffi_unity]` → parse same as `#[unity]`
-  - Keep `#[unity]` parsing for backward compat
+- [x] **T3: Update derive attribute parsing** ✅
+  - `parse_struct_attributes` now checks for both `unity` and `__game_ffi_unity` (same for `unreal`/`__game_ffi_unreal`)
+  - Backward compat preserved — old `#[unity]` as derive helper still works
 
-- [ ] **T4: Update test structs in `derive_tests.rs`**
-  - `PlayerPos` → use `#[unity(name = "PlayerPosUnity")]` alone (no `#[repr(C)]`, no `#[derive]`)
-  - Other test structs → keep `#[derive(GameComponent)]` + `#[repr(C)]` (no unity attr)
-  - Verify all 37 tests still pass
+- [x] **T4: Update test structs in `derive_tests.rs`** ✅
+  - `PlayerPos` → uses `#[unity(name = "PlayerPosUnity")]` alone (no manual `#[repr(C)]` or `#[derive(GameComponent)]`)
+  - `CharacterUpdate` → uses `#[unreal(class = "FCharacterUpdate", blueprint_type)]` alone
+  - All 37 tests pass
 
-- [ ] **T5: Update `unity-ffi` production types**
+- [x] **T5: Update `unity-ffi` production types** ✅
   - `types.rs`: `PacketHeader`, `PlayerPos`, `GameState`, `SpriteMessage` → use `#[unity]` attribute macro
-  - Remove manual `#[repr(C)]` and `#[derive(GameComponent)]` from those structs
-  - Keep `#[derive(GameComponent)]` on DB-only types (`PlayerPositionRecord`, `Position2D`)
+  - `Position2D` and `PlayerPositionRecord` remain `#[derive(GameComponent)]` with `skip_zero_copy` (DB-only)
+  - Re-exported `unity`/`unreal` from `game-ffi/src/lib.rs`
 
 ### Phase 2: `#[unreal]` attribute macro
 
-- [ ] **T6: Add `#[unreal]` attribute macro in `lib.rs`**
-  - Same pattern as `#[unity]`
-  - Inject `#[repr(C)]`, `#[derive(GameComponent)]`, `#[__game_ffi_unreal(...)]`
+- [x] **T6: Add `#[unreal]` attribute macro in `lib.rs`** ✅
+  - Added `#[proc_macro_attribute]` for `unreal` — same pattern as `#[unity]`
+  - Injects `#[repr(C)]`, `#[derive(GameComponent)]`, `#[__game_ffi_unreal(...)]`
 
-- [ ] **T7: Register `__game_ffi_unreal` as derive helper**
-  - Add `__game_ffi_unreal` to derive attributes list
-  - Parse same as current `#[unreal]` parsing
+- [x] **T7: Register `__game_ffi_unreal` as derive helper** ✅
+  - Added `__game_ffi_unreal` to derive attributes list
+  - Parsed same as `#[unreal]` in `parse_struct_attributes`
 
-- [ ] **T8: Update test struct `CharacterUpdate`**
-  - Use `#[unreal(class = "FCharacterUpdate", blueprint_type)]` alone
-  - Verify tests pass
+- [x] **T8: Update test struct `CharacterUpdate`** ✅
+  - Uses `#[unreal(class = "FCharacterUpdate", blueprint_type)]` alone
+  - All tests pass
 
 ### Phase 3: Sync to mu-maxage-shop
 
@@ -164,10 +161,11 @@ The derive macro continues to parse both `#[unity]` (helper) and `#[__game_ffi_u
 
 ### Phase 4: Safety net
 
-- [ ] **T10: Add compile-time check in derive macro**
-  - When `skip_zero_copy` is NOT set and struct has NO `#[repr(C)]`
-  - Emit compile error: "GameComponent requires #[repr(C)] for zero-copy types. Use #[unity(...)] to auto-inject it."
-  - This catches anyone using bare `#[derive(GameComponent)]` on FFI types
+- [x] **T10: Add compile-time check in derive macro** ✅
+  - Added `has_repr_c()` helper to detect `#[repr(C)]` on structs
+  - When `skip_zero_copy` is NOT set and struct has NO `#[repr(C)]`, emits compile error:
+    `"GameComponent requires #[repr(C)] for zero-copy types. Use #[unity(...)] to auto-inject it, or add #[game_ffi(skip_zero_copy)] for DB-only types."`
+  - Fixed all examples and doc tests to include `#[repr(C)]` where needed
 
 ## Key Decisions
 

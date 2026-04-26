@@ -1,7 +1,7 @@
 // Shared types between Rust and C# Unity
 // Must match exactly in both languages (same bit layout)
 
-use game_ffi::GameComponent;
+use game_ffi::{unity, GameComponent};
 
 /// Discriminator for packet types
 /// Every packet MUST start with one of these
@@ -29,8 +29,8 @@ impl PacketType {
 
 /// Common header for all packets
 /// Matches C#: [StructLayout(LayoutKind.Sequential, Pack = 1)]
-#[repr(C)]
-#[derive(GameComponent, Debug, Clone, Copy)]
+#[unity]
+#[derive(Debug, Clone, Copy)]
 pub struct PacketHeader {
     pub packet_type: u8,
     pub magic: u8, // 0xCC for sanity check
@@ -68,8 +68,8 @@ pub struct Position2D {
 /// Player position update packet (header + shared position payload).
 /// Matches C#: [StructLayout(LayoutKind.Sequential, Pack = 1)]
 /// Auto-generates: PlayerPos::UUID, PlayerPos::size(), PlayerPos::as_bytes(), PlayerPos::from_bytes()
-#[repr(C)]
-#[derive(GameComponent, Debug, Clone, Copy)]
+#[unity]
+#[derive(Debug, Clone, Copy)]
 pub struct PlayerPos {
     pub packet_type: u8,
     pub magic: u8,
@@ -146,8 +146,8 @@ impl PlayerPositionRecord {
 /// This is a flexible packet type that can represent different state messages
 /// Use the `GameStateType` constants to interpret fields appropriately
 /// Auto-generates: GameState::UUID, GameState::size(), GameState::as_bytes(), GameState::from_bytes()
-#[repr(C)]
-#[derive(GameComponent, Debug, Clone, Copy)]
+#[unity]
+#[derive(Debug, Clone, Copy)]
 pub struct GameState {
     pub packet_type: u8,
     pub magic: u8,
@@ -302,8 +302,8 @@ impl SpriteType {
 /// Layout: packet_type(1) + magic(1) + operation(1) + padding1(1) + sprite_type(1) + padding2(3) + id(16) + x(2) + y(2) + padding3(2) = 30 bytes
 /// Matches C#: [StructLayout(LayoutKind.Sequential, Pack = 1)]
 /// Auto-generates: SpriteMessage::UUID, SpriteMessage::size(), SpriteMessage::as_bytes(), SpriteMessage::from_bytes()
-#[repr(C)]
-#[derive(GameComponent, Debug, Clone, Copy)]
+#[unity]
+#[derive(Debug, Clone, Copy)]
 pub struct SpriteMessage {
     pub packet_type: u8,
     pub magic: u8,

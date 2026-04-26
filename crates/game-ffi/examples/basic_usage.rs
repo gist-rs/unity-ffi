@@ -12,6 +12,7 @@ use game_ffi::GameComponent;
 /// - Zero-copy methods (as_bytes, from_bytes)
 /// - Validation methods
 /// - FFI wrapper functions
+#[repr(C)]
 #[derive(GameComponent)]
 pub struct PlayerPosition {
     pub x: f32,
@@ -22,6 +23,7 @@ pub struct PlayerPosition {
 /// Example with manual UUID assignment
 ///
 /// Use this for types that need stable UUIDs across versions.
+#[repr(C)]
 #[derive(GameComponent)]
 #[uuid = "fc8bd668-fc0a-4ab7-8b3d-f0f22bb539e2"]
 pub struct GameState {
@@ -33,6 +35,7 @@ pub struct GameState {
 ///
 /// Field-level attributes like min/max are parsed by the macro.
 /// These can be used for validation logic in generated code.
+#[repr(C)]
 #[derive(GameComponent)]
 pub struct EntityUpdate {
     pub entity_id: u64,
@@ -56,6 +59,7 @@ pub struct EntityUpdate {
 /// Example with Unity-specific configuration
 ///
 /// The unity attribute allows customizing the generated C# code.
+#[repr(C)]
 #[derive(GameComponent)]
 #[unity(name = "PlayerPosUnity")]
 pub struct PlayerPos {
@@ -68,6 +72,7 @@ pub struct PlayerPos {
 /// Example with Unreal-specific configuration
 ///
 /// The unreal attribute allows customizing the generated C++ code.
+#[repr(C)]
 #[derive(GameComponent)]
 #[unreal(class = "FCharacterUpdate", blueprint_type)]
 pub struct CharacterUpdate {
@@ -79,6 +84,7 @@ pub struct CharacterUpdate {
 /// Nested struct example
 ///
 /// Structs can reference other GameComponent types.
+#[repr(C)]
 #[derive(GameComponent)]
 pub struct PacketHeader {
     pub packet_type: u8,

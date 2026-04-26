@@ -12,7 +12,7 @@
 
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse_macro_input, Data, DataEnum, DataStruct, DeriveInput, Error, Ident, Type};
+use syn::{parse2, parse_macro_input, Data, DataEnum, DataStruct, DeriveInput, Error, Ident, Type};
 
 use super::attributes::{
     parse_field_attributes, parse_struct_attributes, FieldAttributes, HashMode, StructAttributes,
@@ -50,10 +50,94 @@ pub fn game_component_macro(input: TokenStream) -> TokenStream {
     }
 }
 
+/// Attribute macro `#[unity(...)]` — auto-injects `#[repr(C)]`, `#[derive(GameComponent)]`,
+/// and an internal `#[__game_ffi_unity(...)]` helper for the derive macro to parse.
+///
+/// This prevents users from forgetting `#[repr(C)]` and reduces boilerplate.
+pub fn unity_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_engine_attribute(attr, item, "__game_ffi_unity", "unity")
+}
+
+/// Attribute macro `#[unreal(...)]` — same pattern as `#[unity]` but for Unreal Engine.
+pub fn unreal_attribute(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_engine_attribute(attr, item, "__game_ffi_unreal", "unreal")
+}
+
+/// Shared expansion logic for `#[unity]` and `#[unreal]` attribute macros.
+///
+/// Reads the original attribute args (e.g. `name = "..."`, `read_only`),
+/// then emits a struct annotated with:
+///   1. `#[repr(C)]` — guarantees C memory layout for FFI
+///   2. `#[derive(GameComponent)]` — triggers the derive macro
+///   3. `#[<internal_helper>(...)]` — passes the original args through so
+///      the derive macro can read them (avoids infinite recursion).
+fn expand_engine_attribute(
+    attr: TokenStream,
+    item: TokenStream,
+    internal_helper: &str,
+    _engine: &str,
+) -> TokenStream {
+    let item_tokens: proc_macro2::TokenStream = item.into();
+
+    // Build the internal helper ident from the string name
+    let helper_ident = Ident::new(internal_helper, proc_macro2::Span::call_site());
+
+    // Build the internal helper attribute tokens from the original attr args
+    let internal_attr = if attr.is_empty() {
+        quote! { #[#helper_ident] }
+    } else {
+        let attr_tokens: proc_macro2::TokenStream = attr.into();
+        quote! { #[#helper_ident(#attr_tokens)] }
+    };
+
+    // Build combined token stream: new attrs prepended to original item,
+    // then re-parse so syn normalises the attribute list.
+    let combined = quote! {
+        #[repr(C)]
+        #[derive(GameComponent)]
+        #internal_attr
+        #item_tokens
+    };
+
+    // Re-parse to normalise attributes (derive will see #[repr(C)] etc.)
+    let input: DeriveInput = match parse2(combined) {
+        Ok(i) => i,
+        Err(e) => return e.to_compile_error().into(),
+    };
+
+    input.into_token_stream().into()
+}
+
+/// Check if the struct has `#[repr(C)]` attribute.
+fn has_repr_c(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if let syn::Meta::List(list) = &attr.meta {
+            list.path.is_ident("repr")
+                && list
+                    .tokens
+                    .clone()
+                    .into_iter()
+                    .any(|tt| matches!(tt, proc_macro2::TokenTree::Ident(ident) if ident == "C"))
+        } else {
+            false
+        }
+    })
+}
+
 /// Core implementation of the GameComponent derive macro
 fn impl_game_component(input: DeriveInput) -> Result<proc_macro2::TokenStream, Error> {
     // Parse struct attributes
     let struct_attrs = parse_struct_attributes(&input.attrs)?;
+
+    // Safety net: #[repr(C)] required for zero-copy FFI types.
+    // Types that skip zero-copy (DB-only, internal) don't need it.
+    if !struct_attrs.skip_zero_copy && !has_repr_c(&input.attrs) {
+        return Err(Error::new_spanned(
+            &input,
+            "GameComponent requires #[repr(C)] for zero-copy types. \
+             Use #[unity(...)] to auto-inject it, or add #[game_ffi(skip_zero_copy)] for DB-only types.",
+        ));
+    }
 
     // Extract common information
     let struct_name = &input.ident;

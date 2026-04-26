@@ -12,3 +12,6 @@ mod game_component;
 
 // Re-export the main derive function
 pub use game_component::game_component_macro;
+
+// Re-export attribute macro functions
+pub use game_component::{unity_attribute, unreal_attribute};

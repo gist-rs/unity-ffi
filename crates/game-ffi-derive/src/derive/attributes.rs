@@ -224,11 +224,11 @@ pub fn parse_struct_attributes(attrs: &[Attribute]) -> Result<StructAttributes, 
         } else if attr.path().is_ident("hash") {
             // #[hash = "all"] or #[hash = "name"]
             result.hash_mode = parse_hash_mode(attr)?;
-        } else if attr.path().is_ident("unity") {
-            // #[unity(name = "...", read_only)]
+        } else if attr.path().is_ident("unity") || attr.path().is_ident("__game_ffi_unity") {
+            // #[unity(name = "...", read_only)] or internal #[__game_ffi_unity(...)]
             result.unity = Some(parse_unity_config(attr)?);
-        } else if attr.path().is_ident("unreal") {
-            // #[unreal(class = "...", blueprint_type)]
+        } else if attr.path().is_ident("unreal") || attr.path().is_ident("__game_ffi_unreal") {
+            // #[unreal(class = "...", blueprint_type)] or internal #[__game_ffi_unreal(...)]
             result.unreal = Some(parse_unreal_config(attr)?);
         } else if attr.path().is_ident("game_ffi") {
             // #[game_ffi(skip_validation, skip_default)]
